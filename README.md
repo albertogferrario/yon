@@ -104,6 +104,20 @@ To remove it, on the box:
 systemctl --user disable --now homesh-desktop.service
 ```
 
+## Leaving a box
+
+Nothing here is automated. On the box:
+
+```sh
+systemctl --user disable --now homesh-desktop.service
+```
+
+Then remove what you put there yourself (credentials, repository keys,
+agent logins) and delete the user or hand it over. To give other accounts
+ssh access back, edit or remove
+`/etc/ssh/sshd_config.d/00-hardening.conf` and reload ssh. On the client,
+`homesh <host> rm`.
+
 ## Notes
 
 - `add` and `rm` only write blocks marked `# homesh` in `~/.ssh/config`, and
@@ -121,6 +135,7 @@ systemctl --user disable --now homesh-desktop.service
 ```
 
 Runs against fake `ssh`, `sudo` and `systemd` in a temporary home. No network.
+How it is built: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## License
 
