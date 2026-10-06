@@ -254,8 +254,9 @@ service=homesh-desktop.service
 xpra_bin=$(command -v xpra) || { echo "xpra missing (homesh init, pick desktop)" >&2; exit 1; }
 command -v xfce4-session >/dev/null || { echo "xfce4-session missing (homesh init, pick desktop)" >&2; exit 1; }
 
-if ! systemctl --user is-active --quiet "$service" && xpra list 2>/dev/null | grep -q ":100"; then
-  echo ":100 busy (manual session): xpra stop :100" >&2
+# Only a live session blocks the service; xpra also lists dead ones.
+if ! systemctl --user is-active --quiet "$service" && xpra list 2>/dev/null | grep -Eq "LIVE session at :100([^0-9]|$)"; then
+  echo ":100 busy (live session outside homesh): xpra stop :100" >&2
   exit 1
 fi
 
@@ -339,8 +340,9 @@ desktop() {
   # watcher polls a port the desktop has not bound yet.
   run "$ENSURE_DESKTOP_SCRIPT$HOLD_TUNNEL_SCRIPT" -t -o ExitOnForwardFailure=yes -o LogLevel=ERROR \
     -L "$DESKTOP_PORT:localhost:$DESKTOP_PORT" || status=$?
+  # The remote side or ssh has already said why; add nothing.
   if kill "$watcher" 2>/dev/null; then
-    die "tunnel closed before the desktop answered (exit $status)"
+    exit "$status"
   fi
 }
 

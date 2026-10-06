@@ -134,6 +134,12 @@ answers y
 check "rm deletes the block" bash -c "! grep -q 'box\|198.51.100.7\|# homesh' '$CONFIG'"
 check "rm leaves other hosts intact" bash -c "head -3 '$CONFIG' | cmp -s - '$WORK/config.original'"
 
+# fake_xpra <line>: an xpra whose "list" prints the given line.
+fake_xpra() {
+  # shellcheck disable=SC2016  # $1 belongs to the generated script
+  printf '#!/bin/sh\n[ "$1" = list ] && echo "%s"\nexit 0\n' "$1" >"$WORK/bin/xpra"
+}
+
 # Desktop service on this machine, with systemd and Xpra replaced by fakes.
 export SYSTEMCTL_LOG="$WORK/systemctl.log"
 for tool in xpra xfce4-session; do
@@ -161,6 +167,14 @@ check "a new unit triggers a reload" grep -qF -- "daemon-reload" "$SYSTEMCTL_LOG
 "$HERE/homesh" desktop >/dev/null
 check "an unchanged unit is not reloaded" bash -c "! grep -qF daemon-reload '$SYSTEMCTL_LOG'"
 check "no temporary unit is left behind" test ! -e "$UNIT.new"
+
+fake_xpra "DEAD session at :100"
+check "a dead session on the display does not block the service" "$HERE/homesh" desktop
+fake_xpra "LIVE session at :100"
+check "a live foreign session blocks the service" \
+  bash -c "'$HERE/homesh' desktop 2>&1 | grep -q ':100 busy'"
+fake_xpra "LIVE session at :1000"
+check "another display number is not mistaken for :100" "$HERE/homesh" desktop
 
 rm "$WORK/bin/xpra"
 check "desktop fails clearly without xpra" \
