@@ -1,0 +1,598 @@
+#!/usr/bin/env bash
+# homesh — remote dev boxes over the system ssh client: persistent shell,
+# remote desktop, first-time provisioning.
+#
+# Hosts are the ones in ~/.ssh/config; homesh keeps no state of its own.
+
+# The embedded scripts are single-quoted on purpose: they expand on the target.
+# shellcheck disable=SC2016
+set -euo pipefail
+
+SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
+SSH_CONFIG="$HOME/.ssh/config"
+# Comment line placed right above every Host block homesh writes.
+MARKER="# homesh"
+HOST=""
+DESKTOP_PORT=14500
+DESKTOP_URL="http://localhost:$DESKTOP_PORT"
+DESKTOP_WAIT_SECONDS=90
+
+usage() {
+  cat <<EOF
+homesh                  pick host, pick action
+homesh add              new host -> ~/.ssh/config
+homesh <host>           shell (tmux session)
+homesh <host> desktop   xpra desktop through an ssh tunnel
+homesh <host> init      provision a fresh box
+homesh <host> rm        drop a host homesh added
+
+<host>: ssh alias or user@addr
+
+on the box:
+homesh init             provision this box (root)
+homesh desktop          start the desktop service
+EOF
+}
+
+die() {
+  echo "homesh: $*" >&2
+  exit 1
+}
+
+# --- prompts ----------------------------------------------------------------
+# Answers are read from the terminal on descriptor 3, opened once, so they
+# work while standard input is busy and can be scripted through HOMESH_TTY.
+
+PROMPTS_OPEN=""
+
+open_prompts() {
+  [[ -z $PROMPTS_OPEN ]] || return 0
+  local source=${HOMESH_TTY:-/dev/tty}
+  { : <"$source"; } 2>/dev/null || die "need a tty"
+  exec 3<"$source"
+  PROMPTS_OPEN=1
+}
+
+# ask <question> [default]: stores the reply in ANSWER.
+ask() {
+  local question=$1 default=${2:-} reply=""
+  [[ -z $default ]] || question="$question [$default]"
+  printf '%s: ' "$question" >&2
+  read -r -u 3 reply || reply=""
+  ANSWER=${reply:-$default}
+}
+
+# confirm <question>: true only on an explicit yes.
+confirm() {
+  local reply=""
+  printf '%s [y/N] ' "$1" >&2
+  read -r -u 3 reply || reply=""
+  [[ $reply == [yY]* ]]
+}
+
+# choose <title> <option>...: stores the 1-based pick in CHOICE.
+choose() {
+  local title=$1 index=1 option reply=""
+  shift
+  printf '\n%s\n' "$title" >&2
+  for option in "$@"; do
+    printf '  %d) %s\n' "$index" "$option" >&2
+    index=$((index + 1))
+  done
+  printf '> ' >&2
+  read -r -u 3 reply || die "no input"
+  [[ $reply =~ ^[0-9]+$ && $reply -ge 1 && $reply -le $# ]] || die "bad choice: $reply"
+  CHOICE=$reply
+}
+
+# --- running on the target --------------------------------------------------
+
+# Wraps $1 in single quotes so a POSIX shell reads it as one word.
+quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# run <script> [ssh options...]: runs a POSIX sh script here, or on HOST.
+run() {
+  local script=$1
+  shift
+  if [[ -z $HOST ]]; then
+    sh -c "$script"
+  else
+    ssh ${@+"$@"} -- "$HOST" "sh -c $(quote "$script")"
+  fi
+}
+
+# --- hosts in ~/.ssh/config -------------------------------------------------
+
+# Prints every concrete alias (no patterns), one per line.
+config_hosts() {
+  [[ -f $SSH_CONFIG ]] || return 0
+  awk 'tolower($1) == "host" { for (i = 2; i <= NF; i++) if ($i !~ /[*?!]/) print $i }' "$SSH_CONFIG"
+}
+
+# True when the Host line naming $1 sits right below the homesh marker.
+host_is_managed() {
+  [[ -f $SSH_CONFIG ]] || return 1
+  awk -v host="$1" -v marker="$MARKER" '
+    tolower($1) == "host" && previous == marker { for (i = 2; i <= NF; i++) if ($i == host) found = 1 }
+    { previous = $0 }
+    END { exit !found }' "$SSH_CONFIG"
+}
+
+# Prints user@address as ssh itself resolves the alias.
+host_summary() {
+  ssh -G -- "$1" 2>/dev/null |
+    awk '$1 == "user" { user = $2 } $1 == "hostname" { address = $2 } END { if (address != "") print user "@" address }'
+}
+
+# The readers below consume their whole input: under pipefail, one that exits
+# early can kill the writer with SIGPIPE and fail the pipeline.
+host_login_user() {
+  ssh -G -- "$1" 2>/dev/null | awk '$1 == "user" { user = $2 } END { print user }'
+}
+
+host_exists() {
+  config_hosts | grep -xF -- "$1" >/dev/null
+}
+
+backup_config() {
+  [[ ! -f $SSH_CONFIG ]] || cp -p "$SSH_CONFIG" "$SSH_CONFIG.homesh.bak"
+}
+
+# rewrite_config <awk program> [awk options...]: filters the config in place.
+rewrite_config() {
+  local program=$1
+  shift
+  backup_config
+  awk "$@" "$program" "$SSH_CONFIG.homesh.bak" >"$SSH_CONFIG"
+  chmod 600 "$SSH_CONFIG"
+}
+
+# choose_key <alias>: stores the IdentityFile value, or nothing, in KEY.
+# The tilde is written literally: ssh expands it when reading the config.
+# shellcheck disable=SC2088
+choose_key() {
+  local alias=$1 public names=()
+  for public in "$HOME"/.ssh/*.pub; do
+    if [[ -f ${public%.pub} ]]; then names+=("$(basename "${public%.pub}")"); fi
+  done
+  choose "key" ${names[@]+"${names[@]}"} "+ new key" "ssh default"
+  if [[ $CHOICE -le ${#names[@]} ]]; then
+    KEY="~/.ssh/${names[$((CHOICE - 1))]}"
+  elif [[ $CHOICE -eq $((${#names[@]} + 1)) ]]; then
+    [[ ! -e $HOME/.ssh/$alias ]] || die "exists: $HOME/.ssh/$alias"
+    ssh-keygen -t ed25519 -f "$HOME/.ssh/$alias" -C "$(id -un)@$alias"
+    echo "pubkey (authorize it on the box):"
+    cat "$HOME/.ssh/$alias.pub"
+    KEY="~/.ssh/$alias"
+  else
+    KEY=""
+  fi
+}
+
+add_host() {
+  open_prompts
+  local alias address user
+  ask "host"
+  alias=$ANSWER
+  [[ $alias =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad host name: $alias"
+  ! is_command "$alias" || die "reserved: $alias"
+  ! host_exists "$alias" || die "exists: $alias"
+  ask "addr"
+  address=$ANSWER
+  [[ $address =~ ^[A-Za-z0-9][A-Za-z0-9.:_-]*$ ]] || die "bad addr: $address"
+  ask "user" root
+  user=$ANSWER
+  [[ $user =~ ^[a-z_][a-z0-9_-]*$ ]] || die "bad user: $user"
+  mkdir -p "$HOME/.ssh"
+  chmod 700 "$HOME/.ssh"
+  choose_key "$alias"
+
+  backup_config
+  {
+    if [[ -s $SSH_CONFIG ]]; then echo; fi
+    echo "$MARKER"
+    echo "Host $alias"
+    echo "  HostName $address"
+    echo "  User $user"
+    if [[ -n $KEY ]]; then
+      echo "  IdentityFile $KEY"
+      echo "  IdentitiesOnly yes"
+    fi
+  } >>"$SSH_CONFIG"
+  chmod 600 "$SSH_CONFIG"
+  echo "added $alias"
+  HOST=$alias
+}
+
+remove_host() {
+  open_prompts
+  host_is_managed "$HOST" || die "not homesh-managed: $HOST (edit $SSH_CONFIG)"
+  confirm "rm $HOST?" || die "aborted"
+  rewrite_config '
+    function flush() { if (held) { print marker; held = 0 } }
+    $0 == marker { flush(); held = 1; next }
+    tolower($1) == "host" || tolower($1) == "match" {
+      skipping = 0
+      if (held && tolower($1) == "host") for (i = 2; i <= NF; i++) if ($i == host) skipping = 1
+      if (skipping) { held = 0; next }
+      flush(); print; next
+    }
+    { if (skipping) next; flush(); print }
+    END { flush() }' -v host="$HOST" -v marker="$MARKER"
+  echo "removed $HOST (backup: $SSH_CONFIG.homesh.bak)"
+}
+
+# set_host_user <user>: changes the User of the managed block of HOST.
+set_host_user() {
+  rewrite_config '
+    $0 == marker { pending = 1; print; next }
+    tolower($1) == "host" || tolower($1) == "match" {
+      inside = 0
+      if (pending && tolower($1) == "host") for (i = 2; i <= NF; i++) if ($i == host) inside = 1
+      pending = 0; print; next
+    }
+    { pending = 0 }
+    inside && tolower($1) == "user" { print "  User " user; next }
+    { print }' -v host="$HOST" -v marker="$MARKER" -v user="$1"
+}
+
+# --- shell ------------------------------------------------------------------
+
+# A provisioned box attaches every ssh login to its persistent tmux session.
+shell() {
+  ssh -- "$HOST"
+}
+
+# --- desktop ----------------------------------------------------------------
+
+# Installs and starts a systemd user service running an Xpra desktop whose
+# HTML5 client listens on localhost only. Idempotent; installs no packages.
+ENSURE_DESKTOP_SCRIPT='set -e
+service=homesh-desktop.service
+xpra_bin=$(command -v xpra) || { echo "xpra missing (homesh init, pick desktop)" >&2; exit 1; }
+command -v xfce4-session >/dev/null || { echo "xfce4-session missing (homesh init, pick desktop)" >&2; exit 1; }
+
+if ! systemctl --user is-active --quiet "$service" && xpra list 2>/dev/null | grep -q ":100"; then
+  echo ":100 busy (manual session): xpra stop :100" >&2
+  exit 1
+fi
+
+unit="$HOME/.config/systemd/user/$service"
+mkdir -p "$(dirname "$unit")"
+cat > "$unit.new" <<EOF
+[Unit]
+Description=Homesh remote desktop (Xpra)
+
+[Service]
+ExecStart=$xpra_bin start-desktop :100 --start=xfce4-session --bind-tcp=127.0.0.1:'$DESKTOP_PORT' --html=on --daemon=no
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+if cmp -s "$unit.new" "$unit"; then
+  rm "$unit.new"
+else
+  mv "$unit.new" "$unit"
+  systemctl --user daemon-reload
+  systemctl --user try-restart "$service"
+fi
+systemctl --user enable --quiet --now "$service"
+
+user=$(id -un)
+if [ "$(loginctl show-user "$user" --property=Linger --value 2>/dev/null)" != yes ]; then
+  loginctl enable-linger 2>/dev/null ||
+    echo "note: no linger, desktop starts at first login: sudo loginctl enable-linger $user" >&2
+fi'
+
+# Keeps the ssh connection, and with it the port forward, open until Ctrl+C.
+HOLD_TUNNEL_SCRIPT='
+echo "desktop up"
+exec sleep infinity'
+
+desktop_answers() {
+  curl -fs -o /dev/null --max-time 2 "$DESKTOP_URL"
+}
+
+open_browser() {
+  local opener=xdg-open
+  [[ $(uname) == Darwin ]] && opener=open
+  "$opener" "$DESKTOP_URL" 2>/dev/null || printf 'open %s\r\n' "$DESKTOP_URL"
+}
+
+# Opens the browser as soon as the forwarded port answers.
+open_browser_when_ready() {
+  local waited=0
+  until desktop_answers; do
+    sleep 1
+    waited=$((waited + 1))
+    if [[ $waited -ge $DESKTOP_WAIT_SECONDS ]]; then
+      printf 'homesh: no answer on %s after %ss\r\n' "$DESKTOP_URL" "$DESKTOP_WAIT_SECONDS" >&2
+      return 1
+    fi
+  done
+  open_browser
+  printf '%s — ^C closes the tunnel, desktop stays up\r\n' "$DESKTOP_URL"
+}
+
+desktop() {
+  if [[ -z $HOST ]]; then
+    run "$ENSURE_DESKTOP_SCRIPT"
+    echo "desktop up on $DESKTOP_URL (this box)"
+    return
+  fi
+  if desktop_answers; then
+    open_browser
+    echo "$DESKTOP_URL (tunnel already open)"
+    return
+  fi
+
+  # One ssh connection starts the service, carries the port forward and stays
+  # in the foreground as the tunnel.
+  open_browser_when_ready &
+  local watcher=$!
+  local status=0
+  # LogLevel=ERROR hides the "open failed" notices ssh prints while the
+  # watcher polls a port the desktop has not bound yet.
+  run "$ENSURE_DESKTOP_SCRIPT$HOLD_TUNNEL_SCRIPT" -t -o ExitOnForwardFailure=yes -o LogLevel=ERROR \
+    -L "$DESKTOP_PORT:localhost:$DESKTOP_PORT" || status=$?
+  if kill "$watcher" 2>/dev/null; then
+    die "tunnel closed before the desktop answered (exit $status)"
+  fi
+}
+
+# --- provisioning -----------------------------------------------------------
+# init runs as root on a fresh Ubuntu or Debian server. It installs no
+# development tools or agents.
+
+user_home() {
+  getent passwd "$1" | cut -d: -f6
+}
+
+# The password set here is the one sudo asks for; SSH never accepts it.
+provision_user() {
+  local user=$1 ssh_dir
+  if ! id "$user" &>/dev/null; then
+    adduser --gecos "" "$user" </dev/tty
+  fi
+  usermod -aG sudo "$user"
+  ssh_dir="$(user_home "$user")/.ssh"
+  install -d -m 700 -o "$user" -g "$user" "$ssh_dir"
+  if [[ ! -s $ssh_dir/authorized_keys ]]; then
+    [[ -s /root/.ssh/authorized_keys ]] || die "no key in /root/.ssh/authorized_keys for $user"
+    install -m 600 -o "$user" -g "$user" /root/.ssh/authorized_keys "$ssh_dir/authorized_keys"
+  fi
+}
+
+provision_packages() {
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban tmux unattended-upgrades wget ca-certificates
+}
+
+# The 00- prefix matters: sshd keeps the first value it reads for each option.
+provision_sshd() {
+  cat >/etc/ssh/sshd_config.d/00-hardening.conf <<EOF
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AllowUsers $1
+EOF
+  sshd -t
+  systemctl reload ssh
+}
+
+# SSH must be allowed before the firewall is enabled.
+provision_firewall() {
+  ufw allow OpenSSH
+  ufw --force enable
+}
+
+provision_tmux() {
+  local home
+  home=$(user_home "$1")
+  install -m 644 -o "$1" -g "$1" /dev/stdin "$home/.tmux.conf" <<'EOF'
+set -g mouse on
+set -g history-limit 50000
+set -g base-index 1
+setw -g pane-base-index 1
+set -g renumber-windows on
+set -sg escape-time 10
+set -g focus-events on
+set -g set-clipboard on
+set -g default-terminal "tmux-256color"
+EOF
+  grep -q 'tmux new-session -A -s main' "$home/.bashrc" && return
+  cat >>"$home/.bashrc" <<'EOF'
+
+# Put ~/.local/bin on PATH for every shell, including the ones inside tmux.
+# This must come before the auto-attach below: tmux replaces the login shell,
+# so ~/.profile never reaches its own PATH line, and tmux's inner shells are
+# not login shells. Tools like claude install into ~/.local/bin.
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) PATH="$HOME/.local/bin:$PATH" ;;
+esac
+
+# Attach interactive SSH logins to a persistent tmux session.
+if [ -n "$SSH_CONNECTION" ] && [ -z "$TMUX" ] && command -v tmux > /dev/null; then
+  tmux new-session -A -s main
+fi
+EOF
+}
+
+# The xpra package enables a system-wide proxy on port 14500, unused here.
+# Lingering lets the user's desktop service start at boot.
+provision_desktop() {
+  local codename
+  # shellcheck source=/dev/null
+  codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+  wget -O /usr/share/keyrings/xpra.asc https://xpra.org/xpra.asc
+  wget -O /etc/apt/sources.list.d/xpra.sources \
+    "https://raw.githubusercontent.com/Xpra-org/xpra/master/packaging/repos/$codename/xpra.sources"
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y xpra xpra-html5
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xfce4 xfce4-terminal dbus-x11
+  systemctl disable --now xpra-server.socket xpra-server.service || true
+  loginctl enable-linger "$1"
+}
+
+valid_user() {
+  [[ $1 =~ ^[a-z_][a-z0-9_-]*$ && $1 != root ]]
+}
+
+# Interactive on purpose: it rewrites who can log in, so the plan is shown and
+# confirmed before anything changes. HOMESH_INIT_USER and HOMESH_INIT_DESKTOP
+# carry answers already given on the client.
+init() {
+  [[ $EUID -eq 0 ]] || die "init: need root"
+  command -v apt-get >/dev/null || die "init: ubuntu/debian only"
+  open_prompts
+
+  local user=${HOMESH_INIT_USER:-} desktop="" desktop_line=""
+  if [[ -z $user ]]; then
+    ask "user" "${SUDO_USER:-}"
+    user=$ANSWER
+  fi
+  valid_user "$user" || die "bad user: $user"
+  case ${HOMESH_INIT_DESKTOP:-} in
+    1) desktop=1 ;;
+    0) ;;
+    *) if confirm "desktop (xpra+xfce, ~1GB)?"; then desktop=1; fi ;;
+  esac
+  if [[ -n $desktop ]]; then
+    desktop_line="
+  desktop  xpra+xfce, linger"
+  fi
+
+  cat <<EOF
+
+plan
+  user     $user (+sudo, root's ssh keys)
+  sshd     $user only, keys only (root, passwords, other accounts: out)
+  net      ufw (ssh only), fail2ban, unattended-upgrades
+  tmux     autoattach on ssh login$desktop_line
+
+EOF
+  confirm "go?" || die "aborted"
+
+  provision_user "$user"
+  provision_packages
+  provision_sshd "$user"
+  provision_firewall
+  provision_tmux "$user"
+  if [[ -n $desktop ]]; then provision_desktop "$user"; fi
+
+  cat <<EOF
+
+done. keep this session open and check from another terminal:
+  ssh $user@<box>    ok
+  ssh root@<box>    denied
+then: sudo rm /root/.ssh/authorized_keys
+EOF
+}
+
+# Copies this script to HOST and runs its init there, with the questions
+# asked here, then points the host entry at the new user.
+remote_init() {
+  open_prompts
+  local login user desktop=0 copy
+  login=$(host_login_user "$HOST")
+  if [[ $login == root || -z $login ]]; then
+    ask "user on $HOST" "$(id -un)"
+  else
+    ask "user on $HOST" "$login"
+  fi
+  user=$ANSWER
+  valid_user "$user" || die "bad user: $user"
+  if confirm "desktop (xpra+xfce, ~1GB)?"; then desktop=1; fi
+
+  copy=$(run 'f=$(mktemp) && cat >"$f" && chmod 700 "$f" && echo "$f"' <"$SELF") ||
+    die "copy to $HOST failed"
+  [[ $copy == /* ]] || die "bad reply from $HOST: $copy"
+  run "elevate=''
+[ \"\$(id -u)\" = 0 ] || elevate=sudo
+\$elevate env HOMESH_INIT_USER=$user HOMESH_INIT_DESKTOP=$desktop '$copy' init
+status=\$?
+rm -f '$copy'
+exit \$status" -t || die "init failed on $HOST"
+
+  [[ $user != "$login" ]] || return 0
+  if host_is_managed "$HOST"; then
+    set_host_user "$user"
+    echo "$HOST: user -> $user (backup: $SSH_CONFIG.homesh.bak)"
+  else
+    echo "set 'User $user' for $HOST in $SSH_CONFIG"
+  fi
+}
+
+# --- menus and dispatch -----------------------------------------------------
+
+action_menu() {
+  open_prompts
+  choose "$HOST" "shell" "desktop" "init" "rm"
+  case $CHOICE in
+    1) shell ;;
+    2) desktop ;;
+    3) remote_init ;;
+    4) remove_host ;;
+  esac
+}
+
+host_menu() {
+  open_prompts
+  local hosts=() labels=() line
+  while IFS= read -r line; do
+    hosts+=("$line")
+    labels+=("$(printf '%-14s %s' "$line" "$(host_summary "$line")")")
+  done < <(config_hosts)
+  choose "hosts" ${labels[@]+"${labels[@]}"} "+ add"
+  if [[ $CHOICE -gt ${#hosts[@]} ]]; then
+    add_host
+  else
+    HOST=${hosts[$((CHOICE - 1))]}
+  fi
+  action_menu
+}
+
+# These words are commands; any other first word is an ssh host.
+is_command() {
+  case $1 in add | init | desktop | help | -h | --help) return 0 ;; *) return 1 ;; esac
+}
+
+main() {
+  if [[ $# -eq 0 ]]; then
+    host_menu
+    return
+  fi
+
+  if is_command "$1"; then
+    case "$1:$#" in
+      add:1)
+        add_host
+        action_menu
+        ;;
+      init:1) init ;;
+      desktop:1) desktop ;;
+      help:1 | -h:1 | --help:1) usage ;;
+      *) die "$1: no args" ;;
+    esac
+    return
+  fi
+
+  HOST=$1
+  shift
+  [[ $HOST != -* ]] || die "bad host: $HOST"
+  case "${1:-}:$#" in
+    # "shell" is accepted but left out of the help: a bare host is the idiom.
+    :0 | shell:1) shell ;;
+    desktop:1) desktop ;;
+    init:1) remote_init ;;
+    rm:1) remove_host ;;
+    *) die "bad command: $*" ;;
+  esac
+}
+
+main "$@"
