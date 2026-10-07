@@ -5,12 +5,30 @@ How yon is put together and why. The README covers usage.
 ## Scope
 
 yon does three things on a remote Linux box: open a persistent shell,
-open a desktop, and provision a fresh machine. It orchestrates `ssh`, `tmux`,
+open a desktop, and set up a fresh machine. It orchestrates `ssh`, `tmux`,
 `systemd` and Xpra; it reimplements none of them. Removing yon leaves the
 box and the ssh configuration fully usable by hand.
 
 Session naming, file transfer, networking overlays and development tooling
 are out of scope.
+
+## States
+
+A box is in up to two states, gained in order. Each is held in one place,
+and each command moves one of them, where it is held.
+
+| State | Held by | Up | Down |
+| --- | --- | --- | --- |
+| known | the client, in `~/.ssh/config` | `add` | `rm` |
+| ready | the box | `install` | |
+
+`shell` and `desktop` require a state and change none. No fact is copied
+between holders.
+
+Every command runs without arguments and asks for what it needs. A host
+given first, in the manner of ssh, answers the host question in advance.
+Without one, `install` and `desktop` also offer the local machine, and act
+on it directly when no hosts are configured, which is the case on a box.
 
 ## One script
 
@@ -30,7 +48,7 @@ Hosts are the entries of `~/.ssh/config`. yon has no host database.
 - Listing reads the `Host` lines and skips patterns. User and address are
   resolved by `ssh -G`, so the menu shows what ssh would actually use.
 - `add` appends a block preceded by the marker line `# yon`.
-- `rm` and the user switch after `init` only touch blocks that carry the
+- `rm` and the user switch after `install` only touch blocks that carry the
   marker. Hand-written hosts are listed and usable, never modified.
 - Every write keeps the previous file as `config.yon.bak`.
 - `Include`d files are not parsed.
@@ -47,7 +65,7 @@ executes a script with `sh -c` locally, or through
 wraps the script in single quotes; values interpolated into scripts are
 validated against strict patterns first.
 
-Nothing is installed on the box for `shell` and `desktop`. `init` is the
+Nothing is installed on the box for `shell` and `desktop`. `install` is the
 exception: the client copies the script to a `mktemp` file on the box, runs
 it there, and removes it.
 
@@ -65,7 +83,7 @@ run them in a subshell with its own copy of the descriptor.
 
 ## Shell
 
-`yon <host>` is `ssh -- <host>`. Persistence comes from the box: `init`
+`yon <host>` is `ssh -- <host>`. Persistence comes from the box: `install`
 appends to the user's `.bashrc` a line that attaches every interactive ssh
 login to the tmux session `main`.
 
@@ -95,17 +113,18 @@ The service refuses to start when a live Xpra session not managed by the
 unit already holds display `:100`; dead sessions listed by `xpra list` are
 ignored. The HTML5 client binds to `127.0.0.1` only, without a password.
 
-## Provisioning
+## Install
 
-`init` runs as root on the box. Order matters in two places: the ssh rule
+`install` runs as root on the box. Order matters in two places: the ssh rule
 is added to the firewall before the firewall is enabled, and the sshd
 drop-in is validated with `sshd -t` before the reload. The drop-in is named
 `00-hardening.conf` because sshd keeps the first value it reads for each
 option.
 
-Run from the client, `init` asks its questions locally and passes the
-answers to the remote run through `YON_INIT_USER` and
-`YON_INIT_DESKTOP`. The plan and the final confirmation are still shown
+Run from the client, `install` asks its questions locally and passes the
+answers to the remote run through `YON_INSTALL_USER` and
+`YON_INSTALL_DESKTOP`; their presence also tells the copy on the box to
+act on the box itself. The plan and the final confirmation are still shown
 by the remote side. Knowing the chosen user, the client can then repoint
 the host entry, which is needed because root can no longer log in.
 
@@ -119,8 +138,8 @@ Steps are idempotent, but there is no rollback.
 - Messages are short and lower-case, in the vocabulary of the tools
   involved. Errors name the cause and, where one exists, the command that
   fixes it.
-- Command words are few. A bare host means shell; `shell` is accepted but
-  not listed.
+- Command words are few: plain unix verbs, one per transition. A bare host
+  means shell; `shell` is accepted but not listed.
 
 ## Testing
 
@@ -130,19 +149,19 @@ remote command to a local shell, so quoting is exercised for real. Config
 edits, name validation, menus and the desktop unit are covered. CI runs the
 suite on Ubuntu and macOS.
 
-Provisioning needs root and a real system. It is checked by hand on a
+`install` needs root and a real system. It is checked by hand on a
 disposable VM:
 
 1. Launch an Ubuntu VM and put a public key in root's `authorized_keys`.
 2. With a throwaway `HOME` and an ssh wrapper pointing at its config, run
-   `yon add`, then `init` with the desktop.
+   `yon add`, then `install` with the desktop.
 3. Verify: the new user logs in and root is refused; `ufw` and `fail2ban`
    are active; `yon <host> desktop` serves the Xpra page through the
    tunnel; closing the tunnel leaves the service running; the service is
    back after a reboot.
 
-Because `init` sets `AllowUsers`, the VM's own management account loses ssh
-access. That is expected.
+Because `install` sets `AllowUsers`, the VM's own management account loses
+ssh access. That is expected.
 
 ## Limits
 
@@ -150,4 +169,4 @@ access. That is expected.
 - Port 14500 and display `:100` are fixed, so one desktop per client at a
   time.
 - The desktop has no authentication beyond ssh and local access to the box.
-- No uninstall for what `init` changes.
+- No uninstall for what `install` changes.

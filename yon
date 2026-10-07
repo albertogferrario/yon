@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # yon — remote dev boxes over the system ssh client: persistent shell,
-# remote desktop, first-time provisioning.
+# remote desktop, first-time setup.
+#
+# A box is known to this client (add, rm) and is ready to work on (install).
+# Each command moves one of the two.
 #
 # Hosts are the ones in ~/.ssh/config; yon keeps no state of its own.
 
@@ -16,21 +19,23 @@ HOST=""
 DESKTOP_PORT=14500
 DESKTOP_URL="http://localhost:$DESKTOP_PORT"
 DESKTOP_WAIT_SECONDS=90
+THIS_MACHINE="this machine"
 
 usage() {
   cat <<EOF
 yon                  pick host, pick action
-yon add              new host -> ~/.ssh/config
 yon <host>           shell (tmux session)
-yon <host> desktop   xpra desktop through an ssh tunnel
-yon <host> init      provision a fresh box
-yon <host> rm        drop a host yon added
+
+yon add              new host -> ~/.ssh/config
+yon install          set up a fresh box
+yon desktop          xpra desktop through an ssh tunnel
+yon rm               drop a host yon added
+
+each command asks for what it needs. to skip the host question:
+yon <host> install|desktop|rm
 
 <host>: ssh alias or user@addr
-
-on the box:
-yon init             provision this box (root)
-yon desktop          start the desktop service
+on a machine with no hosts, install and desktop act on the machine itself
 EOF
 }
 
@@ -171,6 +176,15 @@ choose_key() {
   fi
 }
 
+valid_address() {
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9.:_-]*$ ]]
+}
+
+prepare_ssh_dir() {
+  mkdir -p "$HOME/.ssh"
+  chmod 700 "$HOME/.ssh"
+}
+
 add_host() {
   open_prompts
   local alias address user
@@ -181,12 +195,11 @@ add_host() {
   ! host_exists "$alias" || die "exists: $alias"
   ask "addr"
   address=$ANSWER
-  [[ $address =~ ^[A-Za-z0-9][A-Za-z0-9.:_-]*$ ]] || die "bad addr: $address"
+  valid_address "$address" || die "bad addr: $address"
   ask "user" root
   user=$ANSWER
   [[ $user =~ ^[a-z_][a-z0-9_-]*$ ]] || die "bad user: $user"
-  mkdir -p "$HOME/.ssh"
-  chmod 700 "$HOME/.ssh"
+  prepare_ssh_dir
   choose_key "$alias"
 
   backup_config
@@ -240,7 +253,7 @@ set_host_user() {
 
 # --- shell ------------------------------------------------------------------
 
-# A provisioned box attaches every ssh login to its persistent tmux session.
+# A box set up by install attaches every ssh login to its persistent tmux session.
 shell() {
   ssh -- "$HOST"
 }
@@ -251,8 +264,8 @@ shell() {
 # HTML5 client listens on localhost only. Idempotent; installs no packages.
 ENSURE_DESKTOP_SCRIPT='set -e
 service=yon-desktop.service
-xpra_bin=$(command -v xpra) || { echo "xpra missing (yon init, pick desktop)" >&2; exit 1; }
-command -v xfce4-session >/dev/null || { echo "xfce4-session missing (yon init, pick desktop)" >&2; exit 1; }
+xpra_bin=$(command -v xpra) || { echo "xpra missing (yon install, pick desktop)" >&2; exit 1; }
+command -v xfce4-session >/dev/null || { echo "xfce4-session missing (yon install, pick desktop)" >&2; exit 1; }
 
 # Only a live session blocks the service; xpra also lists dead ones.
 if ! systemctl --user is-active --quiet "$service" && xpra list 2>/dev/null | grep -Eq "LIVE session at :100([^0-9]|$)"; then
@@ -346,8 +359,8 @@ desktop() {
   fi
 }
 
-# --- provisioning -----------------------------------------------------------
-# init runs as root on a fresh Ubuntu or Debian server. It installs no
+# --- install ----------------------------------------------------------------
+# install runs as root on a fresh Ubuntu or Debian server. It installs no
 # development tools or agents.
 
 user_home() {
@@ -446,20 +459,20 @@ valid_user() {
 }
 
 # Interactive on purpose: it rewrites who can log in, so the plan is shown and
-# confirmed before anything changes. YON_INIT_USER and YON_INIT_DESKTOP
+# confirmed before anything changes. YON_INSTALL_USER and YON_INSTALL_DESKTOP
 # carry answers already given on the client.
-init() {
-  [[ $EUID -eq 0 ]] || die "init: need root"
-  command -v apt-get >/dev/null || die "init: ubuntu/debian only"
+install_box() {
+  [[ $EUID -eq 0 ]] || die "install: need root"
+  command -v apt-get >/dev/null || die "install: ubuntu/debian only"
   open_prompts
 
-  local user=${YON_INIT_USER:-} desktop="" desktop_line=""
+  local user=${YON_INSTALL_USER:-} desktop="" desktop_line=""
   if [[ -z $user ]]; then
     ask "user" "${SUDO_USER:-}"
     user=$ANSWER
   fi
   valid_user "$user" || die "bad user: $user"
-  case ${YON_INIT_DESKTOP:-} in
+  case ${YON_INSTALL_DESKTOP:-} in
     1) desktop=1 ;;
     0) ;;
     *) if confirm "desktop (xpra+xfce, ~1GB)?"; then desktop=1; fi ;;
@@ -496,9 +509,9 @@ then: sudo rm /root/.ssh/authorized_keys
 EOF
 }
 
-# Copies this script to HOST and runs its init there, with the questions
+# Copies this script to HOST and runs its install there, with the questions
 # asked here, then points the host entry at the new user.
-remote_init() {
+remote_install() {
   open_prompts
   local login user desktop=0 copy
   login=$(host_login_user "$HOST")
@@ -516,10 +529,10 @@ remote_init() {
   [[ $copy == /* ]] || die "bad reply from $HOST: $copy"
   run "elevate=''
 [ \"\$(id -u)\" = 0 ] || elevate=sudo
-\$elevate env YON_INIT_USER=$user YON_INIT_DESKTOP=$desktop '$copy' init
+\$elevate env YON_INSTALL_USER=$user YON_INSTALL_DESKTOP=$desktop '$copy' install
 status=\$?
 rm -f '$copy'
-exit \$status" -t || die "init failed on $HOST"
+exit \$status" -t || die "install failed on $HOST"
 
   [[ $user != "$login" ]] || return 0
   if host_is_managed "$HOST"; then
@@ -534,11 +547,11 @@ exit \$status" -t || die "init failed on $HOST"
 
 action_menu() {
   open_prompts
-  choose "$HOST" "shell" "desktop" "init" "rm"
+  choose "$HOST" "shell" "desktop" "install" "rm"
   case $CHOICE in
     1) shell ;;
     2) desktop ;;
-    3) remote_init ;;
+    3) remote_install ;;
     4) remove_host ;;
   esac
 }
@@ -559,9 +572,39 @@ host_menu() {
   action_menu
 }
 
+# pick_host <title> [local]: stores the pick in HOST. With "local" the machine
+# yon runs on is a choice too, stored as an empty HOST, and the only one
+# when there are no hosts.
+pick_host() {
+  local hosts=() line
+  while IFS= read -r line; do
+    hosts+=("$line")
+  done < <(config_hosts)
+  HOST=""
+  if [[ ${2:-} == local ]]; then
+    [[ ${#hosts[@]} -gt 0 ]] || return 0
+    hosts+=("$THIS_MACHINE")
+  fi
+  [[ ${#hosts[@]} -gt 0 ]] || die "no hosts (yon add)"
+  open_prompts
+  choose "$1" "${hosts[@]}"
+  HOST=${hosts[$((CHOICE - 1))]}
+  [[ $HOST != "$THIS_MACHINE" ]] || HOST=""
+}
+
+# Runs install here or on HOST. The copy a client sends to a box carries its
+# answers in the environment and always means the box itself.
+install_command() {
+  [[ -n ${YON_INSTALL_USER:-} ]] || pick_host install local
+  if [[ -z $HOST ]]; then install_box; else remote_install; fi
+}
+
 # These words are commands; any other first word is an ssh host.
 is_command() {
-  case $1 in add | init | desktop | help | -h | --help) return 0 ;; *) return 1 ;; esac
+  case $1 in
+    add | install | desktop | rm | help | -h | --help) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 main() {
@@ -576,8 +619,15 @@ main() {
         add_host
         action_menu
         ;;
-      init:1) init ;;
-      desktop:1) desktop ;;
+      install:1) install_command ;;
+      desktop:1)
+        pick_host desktop local
+        desktop
+        ;;
+      rm:1)
+        pick_host rm
+        remove_host
+        ;;
       help:1 | -h:1 | --help:1) usage ;;
       *) die "$1: no args" ;;
     esac
@@ -591,7 +641,7 @@ main() {
     # "shell" is accepted but left out of the help: a bare host is the idiom.
     :0 | shell:1) shell ;;
     desktop:1) desktop ;;
-    init:1) remote_init ;;
+    install:1) remote_install ;;
     rm:1) remove_host ;;
     *) die "bad command: $*" ;;
   esac

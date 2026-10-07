@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Exercises yon against fake ssh, sudo and systemd commands in a temporary
-# home. Uses no network; prompts are answered through YON_TTY.
+# Exercises yon against fake ssh, sudo and systemd commands in a
+# temporary home. Uses no network; prompts are answered through YON_TTY.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -38,7 +38,13 @@ cat >"$WORK/bin/sudo" <<'EOF'
 [ -z "${FAKE_SUDO_OK:-}" ] || exit 0
 exec "$@"
 EOF
-chmod +x "$WORK/bin/ssh" "$WORK/bin/sudo"
+
+# No forwarded desktop answers here, and no browser is opened.
+printf '#!/bin/sh\nexit 1\n' >"$WORK/bin/curl"
+for tool in open xdg-open; do
+  printf '#!/bin/sh\nexit 0\n' >"$WORK/bin/$tool"
+done
+chmod +x "$WORK/bin/ssh" "$WORK/bin/sudo" "$WORK/bin/curl" "$WORK/bin/open" "$WORK/bin/xdg-open"
 
 FAILURES=0
 
@@ -63,7 +69,10 @@ printf 'Host old\n  HostName 192.0.2.1\n  User me\n' >"$CONFIG"
 touch "$HOME/.ssh/k1" "$HOME/.ssh/k1.pub"
 cp "$CONFIG" "$WORK/config.original"
 
-check "help lists the host commands" bash -c "'$HERE/yon' --help | grep -q 'yon <host> desktop'"
+check "help lists every command" \
+  bash -c "'$HERE/yon' --help | grep -c '^yon \(add\|install\|desktop\|rm\) ' | grep -qx 4"
+check "help shows the host-first form" \
+  bash -c "'$HERE/yon' --help | grep -qxF 'yon <host> install|desktop|rm'"
 check "interactive commands need a tty" \
   bash -c "YON_TTY=/nonexistent '$HERE/yon' 2>&1 | grep -q 'need a tty'"
 
@@ -80,12 +89,14 @@ check "add keeps a copy of the previous file" cmp -s "$WORK/config.original" "$C
 check "add leaves existing hosts untouched" bash -c "head -3 '$CONFIG' | cmp -s - '$WORK/config.original'"
 check "add then offers the host actions" grep -qF -- " -> box" "$SSH_LOG"
 
-for name in "bad name" "-x" "init" "box"; do
+for name in "bad name" "-x" "install" "box"; do
   answers "$name" 198.51.100.8 "" 1 1
   check "add rejects the name '$name'" rejects add
 done
 answers ok-name 'bad addr;x' "" 1 1
 check "add rejects an unsafe address" rejects add
+answers nobox ""
+check "add rejects an empty address" rejects add
 check "rejected additions change nothing" bash -c "[ \$(grep -c '^Host ' '$CONFIG') -eq 2 ]"
 
 # The interactive entry point lists hosts as ssh resolves them.
@@ -106,22 +117,34 @@ check "shell is accepted as an explicit form" grep -qxF -- " -> box" "$SSH_LOG"
 check "shell is not advertised in the help" bash -c "! '$HERE/yon' --help | grep -qw 'shell$\|<host> shell'"
 check "a host starting with '-' is rejected" rejects -oProxyCommand=x
 check "an unknown host command is rejected" rejects box frobnicate
-check "commands reject extra arguments" rejects init extra
+check "commands reject extra arguments" rejects install extra
 
-# init on a remote host: the questions are asked here, the work runs there.
+# install on a remote host: the questions are asked here, the work runs there.
 answers dev n
-check "a failed remote init is reported" rejects box init
-check "a failed remote init leaves the host entry alone" in_config "  User root"
+check "a failed remote install is reported" rejects box install
+check "a failed remote install leaves the host entry alone" in_config "  User root"
 answers dev n
-FAKE_SUDO_OK=1 "$HERE/yon" box init >/dev/null 2>&1
-check "a completed remote init switches the host to the new user" in_config "  User dev"
+FAKE_SUDO_OK=1 "$HERE/yon" box install >/dev/null 2>&1
+check "a completed remote install switches the host to the new user" in_config "  User dev"
 check "switching the user keeps the rest of the block" in_config "  IdentityFile ~/.ssh/k1"
 check "switching the user leaves other hosts alone" in_config "  User me"
 answers root n
-check "remote init refuses root as the user" rejects box init
+check "remote install refuses root as the user" rejects box install
 
-check "init refuses to run without root" \
-  bash -c "'$HERE/yon' init 2>&1 | grep -q 'need root'"
+# Without a host, install asks which one; the machine itself is the last pick.
+reset_log
+answers 2 dev n
+FAKE_SUDO_OK=1 "$HERE/yon" install >/dev/null 2>&1
+check "install without a host asks for one" grep -qF -- " -> box" "$SSH_LOG"
+answers 3
+check "install offers this machine, where it needs root" \
+  bash -c "'$HERE/yon' install 2>&1 | grep -q '3) this machine' && '$HERE/yon' install 2>&1 | grep -q 'need root'"
+check "the copy sent to a box never asks for a host" \
+  bash -c "YON_INSTALL_USER=dev '$HERE/yon' install 2>&1 | grep -q 'need root'"
+reset_log
+answers 2
+"$HERE/yon" desktop >/dev/null 2>&1 || true
+check "desktop without a host asks for one" grep -qF -- "-L 14500:localhost:14500 -> box" "$SSH_LOG"
 
 # rm: only blocks yon wrote, and only after a yes.
 answers y
@@ -129,10 +152,17 @@ check "rm refuses hosts yon did not add" rejects old rm
 answers n
 check "rm needs an explicit yes" rejects box rm
 check "a declined rm keeps the host" in_config "Host box"
-answers y
-"$HERE/yon" box rm >/dev/null 2>&1
-check "rm deletes the block" bash -c "! grep -q 'box\|198.51.100.7\|# yon' '$CONFIG'"
+answers 2 y
+"$HERE/yon" rm >/dev/null 2>&1
+check "rm without a host asks for one and deletes its block" \
+  bash -c "! grep -q 'box\|198.51.100.7\|# yon' '$CONFIG'"
 check "rm leaves other hosts intact" bash -c "head -3 '$CONFIG' | cmp -s - '$WORK/config.original'"
+
+# From here on the machine has no hosts: install and desktop mean itself.
+: >"$CONFIG"
+check "with no hosts, install acts on this machine" \
+  bash -c "'$HERE/yon' install 2>&1 | grep -q 'need root'"
+check "with no hosts, rm has nothing to pick" bash -c "'$HERE/yon' rm 2>&1 | grep -q 'no hosts'"
 
 # fake_xpra <line>: an xpra whose "list" prints the given line.
 fake_xpra() {

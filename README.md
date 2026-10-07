@@ -5,15 +5,25 @@ development home and gets you into its shell or its desktop with one command.
 
 ```
 yon                  pick host, pick action
-yon add              new host -> ~/.ssh/config
 yon <host>           shell (tmux session)
-yon <host> desktop   xpra desktop through an ssh tunnel
-yon <host> init      provision a fresh box
-yon <host> rm        drop a host yon added
+
+yon add              new host -> ~/.ssh/config
+yon install          set up a fresh box
+yon desktop          xpra desktop through an ssh tunnel
+yon rm               drop a host yon added
 ```
 
-`<host>` is anything ssh accepts: an alias from `~/.ssh/config` or `user@addr`.
-Hosts live in `~/.ssh/config` and nowhere else; yon keeps no state.
+Every command asks for what it needs. Put the host first to skip that
+question: `yon <host> install`. `<host>` is anything ssh accepts, an alias
+from `~/.ssh/config` or `user@addr`.
+
+| A box | Held by | Up | Down |
+| --- | --- | --- | --- |
+| is known here | `~/.ssh/config` | `add` | `rm` |
+| is ready | the box | `install` | |
+
+Each command moves one row. `add` takes any server you can reach. yon keeps
+no state of its own.
 
 ## Install
 
@@ -45,7 +55,7 @@ added box
 box
   1) shell
   2) desktop
-  3) init
+  3) install
   4) rm
 > 3
 user on box [me]: dev
@@ -66,7 +76,7 @@ box: user -> dev
 After that, `yon box` lands in a tmux session that survives disconnects,
 and `yon box desktop` opens the desktop in the browser.
 
-## What init does to the box
+## What install does to the box
 
 Read this before running it on a machine you care about.
 
@@ -126,7 +136,9 @@ ssh access back, edit or remove
 - Hosts defined in files pulled in with `Include` are not listed.
 - Port 14500 and display `:100` are fixed.
 - tmux sessions do not survive a reboot of the box; the desktop does.
-- On the box itself, `yon init` (as root) and `yon desktop` act locally.
+- `install` and `desktop` without a host also offer `this machine`; with no
+  hosts configured, as on the box itself, they act on it directly.
+- `install.sh` puts the CLI on the client; `yon install` sets up a box.
 
 ## Tests
 
@@ -134,7 +146,8 @@ ssh access back, edit or remove
 ./test.sh
 ```
 
-Runs against fake `ssh`, `sudo` and `systemd` in a temporary home. No network.
+Runs against fake `ssh`, `sudo` and `systemd` in a temporary home.
+No network.
 How it is built: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## License
