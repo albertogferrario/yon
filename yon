@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # yon — remote dev boxes over the system ssh client: persistent shell,
-# remote desktop, first-time setup.
+# remote desktop, a port of the box in the browser, first-time setup.
 #
 # A box is known to this client (add, rm) and is ready to work on (install).
 # Each command moves one of the two.
@@ -17,8 +17,7 @@ SSH_CONFIG="$HOME/.ssh/config"
 MARKER="# yon"
 HOST=""
 DESKTOP_PORT=14500
-DESKTOP_URL="http://localhost:$DESKTOP_PORT"
-DESKTOP_WAIT_SECONDS=90
+TUNNEL_WAIT_SECONDS=90
 THIS_MACHINE="this machine"
 
 usage() {
@@ -29,10 +28,12 @@ yon <host>           shell (tmux session)
 yon add              new host -> ~/.ssh/config
 yon install          set up a fresh box
 yon desktop          xpra desktop through an ssh tunnel
+yon open             a port of the box, in the browser
 yon rm               drop a host yon added
 
 each command asks for what it needs. to skip the host question:
 yon <host> install|desktop|rm
+yon <host> open <port>
 
 <host>: ssh alias or user@addr
 on a machine with no hosts, install and desktop act on the machine itself
@@ -302,61 +303,112 @@ if [ "$(loginctl show-user "$user" --property=Linger --value 2>/dev/null)" != ye
     echo "note: no linger, desktop starts at first login: sudo loginctl enable-linger $user" >&2
 fi'
 
+DESKTOP_UP_SCRIPT='
+echo "desktop up"'
+
+desktop() {
+  local url="http://localhost:$DESKTOP_PORT"
+  if [[ -z $HOST ]]; then
+    run "$ENSURE_DESKTOP_SCRIPT"
+    echo "desktop up on $url (this box)"
+    return
+  fi
+  if port_answers "$url"; then
+    open_browser "$url"
+    echo "$url (tunnel already open)"
+    return
+  fi
+  # The connection that starts the service is the one that becomes the tunnel.
+  forward "$DESKTOP_PORT" "$DESKTOP_PORT" "$ENSURE_DESKTOP_SCRIPT$DESKTOP_UP_SCRIPT" ", desktop stays up"
+}
+
+# --- tunnel -----------------------------------------------------------------
+# A port of the box reached through a local ssh forward and shown in the
+# browser. Nothing is exposed beyond the client's loopback interface.
+
 # Keeps the ssh connection, and with it the port forward, open until Ctrl+C.
 HOLD_TUNNEL_SCRIPT='
-echo "desktop up"
 exec sleep infinity'
 
-desktop_answers() {
-  curl -fs -o /dev/null --max-time 2 "$DESKTOP_URL"
+# Any HTTP reply counts, error pages included: the port is being served.
+port_answers() {
+  curl -s -o /dev/null --max-time 2 "$1"
 }
 
 open_browser() {
   local opener=xdg-open
   [[ $(uname) == Darwin ]] && opener=open
-  "$opener" "$DESKTOP_URL" 2>/dev/null || printf 'open %s\r\n' "$DESKTOP_URL"
+  "$opener" "$1" 2>/dev/null || printf 'open %s\r\n' "$1"
 }
 
-# Opens the browser as soon as the forwarded port answers.
+# open_browser_when_ready <url> <note>: opens the browser as soon as the
+# forwarded port answers.
 open_browser_when_ready() {
   local waited=0
-  until desktop_answers; do
+  until port_answers "$1"; do
     sleep 1
     waited=$((waited + 1))
-    if [[ $waited -ge $DESKTOP_WAIT_SECONDS ]]; then
-      printf 'yon: no answer on %s after %ss\r\n' "$DESKTOP_URL" "$DESKTOP_WAIT_SECONDS" >&2
+    if [[ $waited -ge $TUNNEL_WAIT_SECONDS ]]; then
+      printf 'yon: no answer on %s after %ss\r\n' "$1" "$TUNNEL_WAIT_SECONDS" >&2
       return 1
     fi
   done
-  open_browser
-  printf '%s — ^C closes the tunnel, desktop stays up\r\n' "$DESKTOP_URL"
+  open_browser "$1"
+  printf '%s — ^C closes the tunnel%s\r\n' "$1" "$2"
 }
 
-desktop() {
-  if [[ -z $HOST ]]; then
-    run "$ENSURE_DESKTOP_SCRIPT"
-    echo "desktop up on $DESKTOP_URL (this box)"
-    return
-  fi
-  if desktop_answers; then
-    open_browser
-    echo "$DESKTOP_URL (tunnel already open)"
-    return
-  fi
-
-  # One ssh connection starts the service, carries the port forward and stays
-  # in the foreground as the tunnel.
-  open_browser_when_ready &
-  local watcher=$!
-  local status=0
+# forward <local port> <port on the box> <script run on the box first> <note>
+# One ssh connection runs the script, carries the forward and stays in the
+# foreground as the tunnel.
+forward() {
+  local status=0 watcher
+  open_browser_when_ready "http://localhost:$1" "$4" &
+  watcher=$!
   # LogLevel=ERROR hides the "open failed" notices ssh prints while the
-  # watcher polls a port the desktop has not bound yet.
-  run "$ENSURE_DESKTOP_SCRIPT$HOLD_TUNNEL_SCRIPT" -t -o ExitOnForwardFailure=yes -o LogLevel=ERROR \
-    -L "$DESKTOP_PORT:localhost:$DESKTOP_PORT" || status=$?
+  # watcher polls a port nothing on the box has bound yet.
+  run "$3$HOLD_TUNNEL_SCRIPT" -t -o ExitOnForwardFailure=yes -o LogLevel=ERROR \
+    -L "$1:localhost:$2" || status=$?
   # The remote side or ssh has already said why; add nothing.
   if kill "$watcher" 2>/dev/null; then
     exit "$status"
   fi
+}
+
+valid_port() {
+  [[ $1 =~ ^[1-9][0-9]{0,4}$ && $1 -le 65535 ]]
+}
+
+# True when nothing listens on local port $1, on either loopback address.
+port_is_free() {
+  ! (exec 9<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && ! (exec 9<>"/dev/tcp/::1/$1") 2>/dev/null
+}
+
+# Prints the first free local port from $1 up. Ports below 1024 need root to
+# bind, so the search for those starts 8000 higher: 80 becomes 8080.
+free_local_port() {
+  local port=$1
+  [[ $port -ge 1024 || $EUID -eq 0 ]] || port=$((port + 8000))
+  while [[ $port -le 65535 ]]; do
+    if port_is_free "$port"; then
+      echo "$port"
+      return
+    fi
+    port=$((port + 1))
+  done
+  return 1
+}
+
+# open_port [port]: asks for the port of the box when none is given.
+open_port() {
+  local port=${1:-} local_port
+  if [[ $# -eq 0 ]]; then
+    open_prompts
+    ask "port"
+    port=$ANSWER
+  fi
+  valid_port "$port" || die "bad port: $port"
+  local_port=$(free_local_port "$port") || die "no free local port from $port up"
+  forward "$local_port" "$port" "" ""
 }
 
 # --- install ----------------------------------------------------------------
@@ -547,12 +599,13 @@ exit \$status" -t || die "install failed on $HOST"
 
 action_menu() {
   open_prompts
-  choose "$HOST" "shell" "desktop" "install" "rm"
+  choose "$HOST" "shell" "desktop" "open" "install" "rm"
   case $CHOICE in
     1) shell ;;
     2) desktop ;;
-    3) remote_install ;;
-    4) remove_host ;;
+    3) open_port ;;
+    4) remote_install ;;
+    5) remove_host ;;
   esac
 }
 
@@ -602,7 +655,7 @@ install_command() {
 # These words are commands; any other first word is an ssh host.
 is_command() {
   case $1 in
-    add | install | desktop | rm | help | -h | --help) return 0 ;;
+    add | install | desktop | open | rm | help | -h | --help) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -624,6 +677,10 @@ main() {
         pick_host desktop local
         desktop
         ;;
+      open:1)
+        pick_host open
+        open_port
+        ;;
       rm:1)
         pick_host rm
         remove_host
@@ -641,6 +698,8 @@ main() {
     # "shell" is accepted but left out of the help: a bare host is the idiom.
     :0 | shell:1) shell ;;
     desktop:1) desktop ;;
+    open:1) open_port ;;
+    open:2) open_port "$2" ;;
     install:1) remote_install ;;
     rm:1) remove_host ;;
     *) die "bad command: $*" ;;

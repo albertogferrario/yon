@@ -4,8 +4,9 @@ How yon is put together and why. The README covers usage.
 
 ## Scope
 
-yon does three things on a remote Linux box: open a persistent shell,
-open a desktop, and set up a fresh machine. It orchestrates `ssh`, `tmux`,
+yon does four things on a remote Linux box: open a persistent shell,
+open a desktop, show one of its ports in the browser, and set up a fresh
+machine. It orchestrates `ssh`, `tmux`,
 `systemd` and Xpra; it reimplements none of them. Removing yon leaves the
 box and the ssh configuration fully usable by hand.
 
@@ -22,12 +23,13 @@ and each command moves one of them, where it is held.
 | known | the client, in `~/.ssh/config` | `add` | `rm` |
 | ready | the box | `install` | |
 
-`shell` and `desktop` require a state and change none. No fact is copied
+`shell`, `desktop` and `open` require a state and change none. No fact is copied
 between holders.
 
 Every command runs without arguments and asks for what it needs. A host
 given first, in the manner of ssh, answers the host question in advance.
-Without one, `install` and `desktop` also offer the local machine, and act
+`open` also takes the port after the command word. Without a host,
+`install` and `desktop` also offer the local machine, and act
 on it directly when no hosts are configured, which is the case on a box.
 
 ## One script
@@ -65,7 +67,7 @@ executes a script with `sh -c` locally, or through
 wraps the script in single quotes; values interpolated into scripts are
 validated against strict patterns first.
 
-Nothing is installed on the box for `shell` and `desktop`. `install` is the
+Nothing is installed on the box for `shell`, `desktop` and `open`. `install` is the
 exception: the client copies the script to a `mktemp` file on the box, runs
 it there, and removes it.
 
@@ -93,25 +95,41 @@ the attach. On Ubuntu `~/.profile` sources `.bashrc` first and extends
 never reaches that line, and shells started by tmux are not login shells.
 Without the snippet, user-installed tools are missing inside tmux.
 
-## Desktop
+## Tunnel
 
-One ssh connection does everything:
-
-1. The remote script writes the systemd user unit if it differs from the
-   existing one, enables and starts it, and checks lingering.
-2. The same connection carries `-L 14500:localhost:14500`.
-3. The remote script ends in `sleep infinity`, holding the tunnel open in
-   the foreground.
+`desktop` and `open` share one mechanism, `forward`. A single ssh
+connection runs a script on the box, carries `-L <local>:localhost:<port>`
+and ends in `sleep infinity`, which holds the tunnel in the foreground.
 
 Locally, a background watcher polls the forwarded port and opens the
-browser when it answers. A single connection means a single authentication.
-`LogLevel=ERROR` hides the "open failed" notices ssh prints while the port
-is polled before Xpra has bound it. A pseudo-terminal is requested so that
-closing the connection hangs up the remote `sleep`.
+browser when it answers; any HTTP reply counts, error pages included. A
+single connection means a single authentication. `LogLevel=ERROR` hides the
+"open failed" notices ssh prints while the port is polled before anything
+on the box has bound it. A pseudo-terminal is requested so that closing the
+connection hangs up the remote `sleep`.
+
+## Desktop
+
+The script run before the hold writes the systemd user unit if it differs
+from the existing one, enables and starts it, and checks lingering. The
+forward is `14500` on both ends. When the local port already answers, the
+tunnel is taken to be open and only the browser is launched.
 
 The service refuses to start when a live Xpra session not managed by the
 unit already holds display `:100`; dead sessions listed by `xpra list` are
 ignored. The HTML5 client binds to `127.0.0.1` only, without a password.
+
+## Open
+
+`open` runs no script before the hold: it forwards a port something on the
+box already serves. The local port is the first free one from the port of
+the box upwards, probed with Bash's `/dev/tcp` on both loopback addresses,
+so two tunnels to the same port number on different boxes can coexist. Ports
+below 1024 need root to bind locally; for those the search starts 8000
+higher.
+
+The forward targets `localhost` on the box, so services bound to the
+loopback interface are reachable and the firewall is not involved.
 
 ## Install
 
@@ -146,7 +164,8 @@ Steps are idempotent, but there is no rollback.
 `test.sh` runs the script in a temporary home with fake `ssh`, `sudo`,
 `systemctl`, `loginctl` and `xpra` on `PATH`. The fake `ssh` hands the
 remote command to a local shell, so quoting is exercised for real. Config
-edits, name validation, menus and the desktop unit are covered. CI runs the
+edits, name validation, menus, the desktop unit and the choice of the local
+port are covered; a fake `sleep` ends the tunnel at once. CI runs the
 suite on Ubuntu and macOS.
 
 `install` needs root and a real system. It is checked by hand on a
@@ -169,4 +188,5 @@ ssh access. That is expected.
 - Port 14500 and display `:100` are fixed, so one desktop per client at a
   time.
 - The desktop has no authentication beyond ssh and local access to the box.
+- `open` assumes plain http on the forwarded port.
 - No uninstall for what `install` changes.

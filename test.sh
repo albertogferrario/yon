@@ -39,12 +39,15 @@ cat >"$WORK/bin/sudo" <<'EOF'
 exec "$@"
 EOF
 
-# No forwarded desktop answers here, and no browser is opened.
+# No forwarded port answers here, and no browser is opened.
 printf '#!/bin/sh\nexit 1\n' >"$WORK/bin/curl"
+# The remote side of a tunnel returns at once instead of holding it.
+# shellcheck disable=SC2016  # $1 and $@ belong to the generated script
+printf '#!/bin/sh\n[ "$1" = infinity ] || exec /bin/sleep "$@"\n' >"$WORK/bin/sleep"
 for tool in open xdg-open; do
   printf '#!/bin/sh\nexit 0\n' >"$WORK/bin/$tool"
 done
-chmod +x "$WORK/bin/ssh" "$WORK/bin/sudo" "$WORK/bin/curl" "$WORK/bin/open" "$WORK/bin/xdg-open"
+chmod +x "$WORK/bin/ssh" "$WORK/bin/sudo" "$WORK/bin/curl" "$WORK/bin/sleep" "$WORK/bin/open" "$WORK/bin/xdg-open"
 
 FAILURES=0
 
@@ -70,9 +73,9 @@ touch "$HOME/.ssh/k1" "$HOME/.ssh/k1.pub"
 cp "$CONFIG" "$WORK/config.original"
 
 check "help lists every command" \
-  bash -c "'$HERE/yon' --help | grep -c '^yon \(add\|install\|desktop\|rm\) ' | grep -qx 4"
+  bash -c "'$HERE/yon' --help | grep -c '^yon \(add\|install\|desktop\|open\|rm\) ' | grep -qx 5"
 check "help shows the host-first form" \
-  bash -c "'$HERE/yon' --help | grep -qxF 'yon <host> install|desktop|rm'"
+  bash -c "'$HERE/yon' --help | grep -qxF 'yon <host> install|desktop|rm' && '$HERE/yon' --help | grep -qxF 'yon <host> open <port>'"
 check "interactive commands need a tty" \
   bash -c "YON_TTY=/nonexistent '$HERE/yon' 2>&1 | grep -q 'need a tty'"
 
@@ -89,7 +92,7 @@ check "add keeps a copy of the previous file" cmp -s "$WORK/config.original" "$C
 check "add leaves existing hosts untouched" bash -c "head -3 '$CONFIG' | cmp -s - '$WORK/config.original'"
 check "add then offers the host actions" grep -qF -- " -> box" "$SSH_LOG"
 
-for name in "bad name" "-x" "install" "box"; do
+for name in "bad name" "-x" "install" "open" "box"; do
   answers "$name" 198.51.100.8 "" 1 1
   check "add rejects the name '$name'" rejects add
 done
@@ -145,6 +148,56 @@ reset_log
 answers 2
 "$HERE/yon" desktop >/dev/null 2>&1 || true
 check "desktop without a host asks for one" grep -qF -- "-L 14500:localhost:14500 -> box" "$SSH_LOG"
+
+# open: one ssh connection carries the forward; the local port is the first
+# free one from the port of the box.
+forwarded() { grep -Eq -- "-L $1:localhost:$2 -> box\$" "$SSH_LOG"; }
+reset_log
+"$HERE/yon" box open 3000 >/dev/null 2>&1
+check "open forwards the port of the box" forwarded '[0-9]+' 3000
+reset_log
+answers 8080
+"$HERE/yon" box open >/dev/null 2>&1
+check "open asks for the port" forwarded '[0-9]+' 8080
+reset_log
+answers 2 8081
+OPENED=$("$HERE/yon" open 2>&1)
+check "open without a host asks for one" forwarded '[0-9]+' 8081
+check "open does not offer this machine" bash -c "! grep -q 'this machine' <<<'$OPENED'"
+reset_log
+answers 2 3 8082
+"$HERE/yon" >/dev/null 2>&1
+check "the action menu offers open" forwarded '[0-9]+' 8082
+reset_log
+"$HERE/yon" box open 80 >/dev/null 2>&1
+check "a privileged port is forwarded from an unprivileged one" forwarded '8[0-9]{3}' 80
+for port in 0 65536 abc 80x 080 ""; do
+  answers ""
+  check "open rejects the port '$port'" rejects box open "$port"
+done
+check "open takes a single port" rejects box open 3000 3001
+
+# A listener on the loopback interface occupies a port picked by the system.
+if command -v python3 >/dev/null; then
+  python3 -c 'import socket, sys, time
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(1)
+print(s.getsockname()[1])
+sys.stdout.flush()
+time.sleep(60)' >"$WORK/busy-port" &
+  LISTENER=$!
+  until [[ -s $WORK/busy-port ]]; do sleep 0.1; done
+  BUSY=$(cat "$WORK/busy-port")
+  reset_log
+  "$HERE/yon" box open "$BUSY" >/dev/null 2>&1
+  check "a busy local port is skipped" bash -c "grep -Eq -- '-L [0-9]+:localhost:$BUSY -> box\$' '$SSH_LOG' && ! grep -qF -- '-L $BUSY:' '$SSH_LOG'"
+  kill "$LISTENER"
+  wait "$LISTENER" 2>/dev/null || true
+  reset_log
+  "$HERE/yon" box open "$BUSY" >/dev/null 2>&1
+  check "a free local port matches the port of the box" forwarded "$BUSY" "$BUSY"
+fi
 
 # rm: only blocks yon wrote, and only after a yes.
 answers y

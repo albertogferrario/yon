@@ -10,11 +10,12 @@ yon <host>           shell (tmux session)
 yon add              new host -> ~/.ssh/config
 yon install          set up a fresh box
 yon desktop          xpra desktop through an ssh tunnel
+yon open             a port of the box, in the browser
 yon rm               drop a host yon added
 ```
 
 Every command asks for what it needs. Put the host first to skip that
-question: `yon <host> install`. `<host>` is anything ssh accepts, an alias
+question: `yon <host> install`, `yon <host> open 3000`. `<host>` is anything ssh accepts, an alias
 from `~/.ssh/config` or `user@addr`.
 
 | A box | Held by | Up | Down |
@@ -55,9 +56,10 @@ added box
 box
   1) shell
   2) desktop
-  3) install
-  4) rm
-> 3
+  3) open
+  4) install
+  5) rm
+> 4
 user on box [me]: dev
 desktop (xpra+xfce, ~1GB)? [y/N] y
 
@@ -114,6 +116,17 @@ To remove it, on the box:
 systemctl --user disable --now yon-desktop.service
 ```
 
+## Open
+
+`yon <host> open 3000` forwards port 3000 of the box over the ssh
+connection and opens `http://localhost:3000`: a dev server or a preview
+becomes visible on the client and nowhere else. `^C` closes the tunnel.
+Nothing is installed or started on the box, and no firewall rule is needed.
+
+If the local port is taken, the next free one is used and the address
+printed says which. Ports below 1024 are served from 8000 higher: 80 on the
+box is `http://localhost:8080`.
+
 ## Leaving a box
 
 Nothing here is automated. On the box:
@@ -134,7 +147,8 @@ ssh access back, edit or remove
   keep the previous file as `config.yon.bak`. Hosts you wrote by hand show
   up in the menu and are never modified.
 - Hosts defined in files pulled in with `Include` are not listed.
-- Port 14500 and display `:100` are fixed.
+- Port 14500 and display `:100` are fixed for the desktop.
+- `open` speaks plain http to the forwarded port.
 - tmux sessions do not survive a reboot of the box; the desktop does.
 - `install` and `desktop` without a host also offer `this machine`; with no
   hosts configured, as on the box itself, they act on it directly.
@@ -147,7 +161,7 @@ ssh access back, edit or remove
 ```
 
 Runs against fake `ssh`, `sudo` and `systemd` in a temporary home.
-No network.
+No network beyond the loopback interface.
 How it is built: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## License
