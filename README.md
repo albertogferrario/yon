@@ -29,7 +29,7 @@ no state of its own.
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/albertogferrario/homesh/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/albertogferrario/yon/main/install.sh | sh
 ```
 
 Drops `yon` into `~/.local/bin` (`/usr/local/bin` as root). Touches nothing
