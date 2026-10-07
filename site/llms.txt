@@ -1,0 +1,32 @@
+# yon
+
+> yon is a single Bash script that turns a fresh VPS (Ubuntu or Debian) into a remote development box reached over ssh: a persistent tmux shell, an XFCE desktop in the browser through an ssh tunnel, any port of the box forwarded to the local browser, and file copies with rsync. It hardens the box on setup (keys-only ssh for one user, ufw with only ssh open, fail2ban, unattended upgrades) and keeps no state of its own beyond `~/.ssh/config`. MIT licensed.
+
+Client: macOS or Linux with bash, ssh, curl, rsync. Box: Ubuntu or Debian with apt and systemd.
+
+Install on the client:
+
+    curl -fsSL https://raw.githubusercontent.com/albertogferrario/yon/main/install.sh | sh
+
+Commands:
+
+- `yon add`: add a server to `~/.ssh/config`
+- `yon <host> install`: set up and harden a fresh box (shows the plan, asks before applying)
+- `yon <host>`: shell in a tmux session that survives disconnects
+- `yon <host> desktop`: Xpra + XFCE desktop in the browser, over an ssh tunnel, never exposed to the network
+- `yon <host> open <port>`: forward a port of the box to `http://localhost:<port>` and open it
+- `yon <host> put <local> [remote]`, `yon <host> get <remote> [local]`: copy files or directories with `rsync -a`, resumable
+- `yon <host> rm`: remove a host that yon added
+
+## Use cases
+
+- Coding agents (Claude Code, Codex, OpenCode) on a VPS, running in tmux so they continue when the laptop sleeps or ssh drops; any ssh client, a phone app included, lands in the same session; `open` previews the dev server they start.
+- Self-hosted personal assistants (OpenClaw, Hermes Agent) on a box where only ssh is reachable; the web UI stays on the box's localhost and `yon <host> open 18789` reaches the OpenClaw dashboard.
+- A browser-based desktop on a headless server for GUI tools, sign-ins and CAPTCHAs.
+- Everything goes over ssh: no VPN (Tailscale not required), no hosted service, any provider.
+
+## Docs
+
+- [README](https://github.com/albertogferrario/yon/blob/main/README.md): usage, what `install` changes on the box, limits
+- [Design](https://github.com/albertogferrario/yon/blob/main/docs/DESIGN.md): states, scope, implementation choices
+- [Source](https://github.com/albertogferrario/yon)

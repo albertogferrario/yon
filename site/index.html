@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yon: remote dev boxes over ssh</title>
+<meta name="description" content="One bash script that turns a fresh VPS into a remote dev box over ssh: persistent tmux shell, browser desktop, port forwarding, hardening. For coding agents, personal assistants and dev servers.">
+<link rel="canonical" href="https://yon.sh/">
+<link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "yon",
+  "url": "https://yon.sh/",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux",
+  "license": "https://opensource.org/licenses/MIT",
+  "codeRepository": "https://github.com/albertogferrario/yon",
+  "description": "One bash script that turns a fresh VPS into a remote dev box over ssh: persistent tmux shell, browser desktop, port forwarding, hardening.",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+<style>
+  :root { --fg: #111; --bg: #fff; --muted: #555; --code: #f3f3f3; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e8e8e8; --bg: #111; --muted: #999; --code: #1d1d1d; }
+  }
+  body { margin: 0 auto; max-width: 42rem; padding: 2rem 1rem; font: 16px/1.55 ui-monospace, Menlo, monospace; color: var(--fg); background: var(--bg); }
+  h1 { font-size: 1.4rem; margin: 0 0 .5rem; }
+  h2 { font-size: 1rem; margin-top: 2rem; }
+  p, li { color: var(--fg); }
+  pre { background: var(--code); padding: .75rem; overflow-x: auto; }
+  a { color: inherit; }
+  footer { margin-top: 3rem; color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>yon</h1>
+<p>Remote dev boxes over ssh. One bash script that turns a fresh VPS into a
+development home and gets you into its shell or its desktop with one command.
+For work that keeps running while the laptop is closed: coding agents,
+personal assistants, dev servers.</p>
+
+<pre>curl -fsSL https://raw.githubusercontent.com/albertogferrario/yon/main/install.sh | sh</pre>
+
+<pre>yon                  pick host, pick action
+yon &lt;host&gt;           shell (tmux session)
+
+yon add              new host -&gt; ~/.ssh/config
+yon install          set up a fresh box
+yon desktop          xpra desktop through an ssh tunnel
+yon open             a port of the box, in the browser
+yon put              file or dir -&gt; box
+yon get              file or dir &lt;- box
+yon rm               drop a host yon added</pre>
+
+<h2>Use cases</h2>
+<ul>
+  <li><strong>Coding agents on a VPS.</strong> Claude Code, Codex or OpenCode
+  in a tmux session that survives disconnects and that any ssh client, a phone app included, reattaches to; <code>yon box open 3000</code>
+  shows the dev server they start.</li>
+  <li><strong>A personal assistant that stays up.</strong> OpenClaw or Hermes
+  Agent on a box where only ssh is reachable; <code>yon box open 18789</code>
+  brings the OpenClaw dashboard to the local browser.</li>
+  <li><strong>A desktop on a server.</strong> XFCE in the browser, through an
+  ssh tunnel, for GUI tools, sign-ins and CAPTCHAs.</li>
+</ul>
+
+<p>Everything goes over ssh: no VPN, no hosted service, any provider.</p>
+
+<h2>What install does</h2>
+<p>New sudo user, keys-only ssh for that user alone, ufw with only ssh open,
+fail2ban, unattended upgrades, tmux on login, optionally Xpra and XFCE. It
+shows the plan and waits for a yes. Client: macOS or Linux. Box: Ubuntu or
+Debian.</p>
+
+<footer>
+  <a href="https://github.com/albertogferrario/yon">source</a> ·
+  <a href="https://github.com/albertogferrario/yon/blob/main/README.md">readme</a> ·
+  <a href="/llms.txt">llms.txt</a> · MIT
+</footer>
+</body>
+</html>
