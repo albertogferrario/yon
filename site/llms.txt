@@ -18,6 +18,10 @@ Commands:
 - `yon <host> put <local> [remote]`, `yon <host> get <remote> [local]`: copy files or directories with `rsync -a`, resumable
 - `yon <host> rm`: remove a host that yon added
 
+## For agents
+
+Ask the user before running `put`, `get` or `rm`. `put` and `get` overwrite files of the same name at the destination without asking, and `rm` removes a host entry from `~/.ssh/config`. `install` shows its plan and asks before applying: pass that question to the user rather than answering it.
+
 ## Use cases
 
 - Coding agents (Claude Code, Codex, OpenCode) on a VPS, running in tmux so they continue when the laptop sleeps or ssh drops; any ssh client, a phone app included, lands in the same session; `open` previews the dev server they start.
