@@ -223,7 +223,11 @@ disposable VM:
    back after a reboot.
 
 Because `install` sets `AllowUsers`, the VM's own management account loses
-ssh access. That is expected.
+ssh access. That is expected. A VM manager that keeps retrying that login
+(`multipass info`, `exec`, `restart`) can get the host address banned by
+`fail2ban`, and ssh from the host is then refused for the length of the ban
+(ten minutes by default). After `install`, reach the VM through the new
+user only.
 
 ## Limits
 
