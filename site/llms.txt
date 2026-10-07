@@ -6,7 +6,7 @@ Client: macOS or Linux with bash, ssh, curl, rsync. Box: Ubuntu or Debian with a
 
 Install on the client:
 
-    curl -fsSL https://raw.githubusercontent.com/albertogferrario/yon/main/install.sh | sh
+    curl -fsSL https://yon.sh/install | sh
 
 Commands:
 
@@ -27,6 +27,6 @@ Commands:
 
 ## Docs
 
-- [README](https://github.com/albertogferrario/yon/blob/main/README.md): usage, what `install` changes on the box, limits
-- [Design](https://github.com/albertogferrario/yon/blob/main/docs/DESIGN.md): states, scope, implementation choices
+- [README](https://github.com/albertogferrario/yon/blob/master/README.md): usage, what `install` changes on the box, limits
+- [Design](https://github.com/albertogferrario/yon/blob/master/docs/DESIGN.md): states, scope, implementation choices
 - [Source](https://github.com/albertogferrario/yon)

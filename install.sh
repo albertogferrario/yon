@@ -2,13 +2,13 @@
 # Installs the yon CLI on this machine — client or box alike, same job.
 # Changes nothing else.
 #
-#   curl -fsSL https://raw.githubusercontent.com/albertogferrario/yon/main/install.sh | sh
+#   curl -fsSL https://yon.sh/install | sh
 #   ./install.sh        from a checkout: installs the yon next to this file
 #
 # POSIX sh, wrapped in main so a truncated download cannot run half of it.
 set -eu
 
-SOURCE_URL="https://raw.githubusercontent.com/albertogferrario/yon/main/yon"
+SOURCE_URL="https://raw.githubusercontent.com/albertogferrario/yon/master/yon"
 
 main() {
   bin_dir="$HOME/.local/bin"
