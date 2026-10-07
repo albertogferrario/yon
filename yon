@@ -354,7 +354,7 @@ open_browser_when_ready() {
     sleep 1
     waited=$((waited + 1))
     if [[ $waited -ge $TUNNEL_WAIT_SECONDS ]]; then
-      printf 'yon: no answer on %s after %ss\r\n' "$1" "$TUNNEL_WAIT_SECONDS" >&2
+      printf 'yon: no http answer on %s after %ss; the tunnel stays open\r\n' "$1" "$TUNNEL_WAIT_SECONDS" >&2
       return 1
     fi
   done
@@ -573,19 +573,27 @@ EOF
 }
 
 # The xpra package enables a system-wide proxy on port 14500, unused here.
-# Lingering lets the user's desktop service start at boot.
+# Lingering lets the user's desktop service start at boot. The apt source
+# file comes from a release tag; a distribution newer than the tag has none.
+XPRA_TAG=v6.5.4
 provision_desktop() {
   local codename
   # shellcheck source=/dev/null
   codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
   wget -O /usr/share/keyrings/xpra.asc https://xpra.org/xpra.asc
   wget -O /etc/apt/sources.list.d/xpra.sources \
-    "https://raw.githubusercontent.com/Xpra-org/xpra/master/packaging/repos/$codename/xpra.sources"
+    "https://raw.githubusercontent.com/Xpra-org/xpra/$XPRA_TAG/packaging/repos/$codename/xpra.sources"
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y xpra xpra-html5
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xfce4 xfce4-terminal dbus-x11
   systemctl disable --now xpra-server.socket xpra-server.service || true
   loginctl enable-linger "$1"
+}
+
+# Accounts other than $1 with a login shell: AllowUsers shuts them out of ssh.
+other_login_users() {
+  getent passwd | awk -F: -v user="$1" '
+    $3 >= 1000 && $1 != user && $7 !~ /(nologin|false)$/ { printf "%s%s", sep, $1; sep = ", " }'
 }
 
 valid_user() {
@@ -600,7 +608,7 @@ install_box() {
   command -v apt-get >/dev/null || die "install: ubuntu/debian only"
   open_prompts
 
-  local user=${YON_INSTALL_USER:-} desktop="" desktop_line=""
+  local user=${YON_INSTALL_USER:-} desktop="" desktop_line="" others out_line=""
   if [[ -z $user ]]; then
     ask "user" "${SUDO_USER:-}"
     user=$ANSWER
@@ -611,6 +619,11 @@ install_box() {
     0) ;;
     *) if confirm "desktop (xpra+xfce, ~1GB)?"; then desktop=1; fi ;;
   esac
+  others=$(other_login_users "$user")
+  if [[ -n $others ]]; then
+    out_line="
+  out      $others"
+  fi
   if [[ -n $desktop ]]; then
     desktop_line="
   desktop  xpra+xfce, linger"
@@ -620,7 +633,7 @@ install_box() {
 
 plan
   user     $user (+sudo, root's ssh keys)
-  sshd     $user only, keys only (root, passwords, other accounts: out)
+  sshd     $user only, keys only (root, passwords, other accounts: out)$out_line
   net      ufw (ssh only), fail2ban, unattended-upgrades
   tmux     autoattach on ssh login$desktop_line
 

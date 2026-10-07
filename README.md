@@ -93,6 +93,7 @@ desktop (xpra+xfce, ~1GB)? [y/N] y
 plan
   user     dev (+sudo, root's ssh keys)
   sshd     dev only, keys only (root, passwords, other accounts: out)
+  out      ubuntu
   net      ufw (ssh only), fail2ban, unattended-upgrades
   tmux     autoattach on ssh login
   desktop  xpra+xfce, linger
@@ -113,13 +114,15 @@ Read this before running it on a machine you care about.
   `authorized_keys` to it.
 - Writes `/etc/ssh/sshd_config.d/00-hardening.conf`: no root login, no
   passwords, `AllowUsers <user>`. **Every other account loses ssh access**,
-  including provider or automation accounts.
+  including provider or automation accounts. The plan names the accounts
+  with a login shell that would be shut out.
 - Enables `ufw` with only ssh open. Anything else you serve from the box
   needs its own rule.
 - Installs `fail2ban`, `rsync`, `tmux`, `unattended-upgrades`.
 - Appends to the user's `.bashrc`: `~/.local/bin` on `PATH`, and attach to
   the tmux session `main` on ssh login.
-- With the desktop: adds the xpra.org apt repository, installs Xpra and XFCE,
+- With the desktop: adds the xpra.org apt repository (source file from a
+  fixed Xpra release tag), installs Xpra and XFCE,
   disables Xpra's system-wide proxy, enables lingering for the user.
 
 It shows this plan and waits for a yes. It does not undo itself: keep the
@@ -195,7 +198,9 @@ ssh access back, edit or remove
   up in the menu and are never modified.
 - Hosts defined in files pulled in with `Include` are not listed.
 - Port 14500 and display `:100` are fixed for the desktop.
-- `open` speaks plain http to the forwarded port.
+- `open` speaks plain http to the forwarded port. A port that does not
+  speak http, such as Postgres, is forwarded all the same: after 90 seconds
+  yon says there is no http answer and keeps the tunnel open.
 - tmux sessions do not survive a reboot of the box; the desktop does.
 - `install` and `desktop` without a host also offer `this machine`; with no
   hosts configured, as on the box itself, they act on it directly.
