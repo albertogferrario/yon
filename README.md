@@ -2,6 +2,8 @@
 
 Remote dev boxes over ssh. One bash script that turns a fresh VPS into a
 development home and gets you into its shell or its desktop with one command.
+For work that keeps running while the laptop is closed: coding agents,
+personal assistants, dev servers.
 
 ```
 yon                  pick host, pick action
@@ -29,6 +31,25 @@ question: `yon <host> install`, `yon <host> open 3000`,
 
 Each command moves one row. `add` takes any server you can reach. yon keeps
 no state of its own.
+
+## Use cases
+
+- **Coding agents on a VPS.** Claude Code, Codex or OpenCode run in the
+  box's tmux session: they keep working when the laptop sleeps or the
+  connection drops, and `yon box` reattaches to them. Any ssh client lands
+  in the same session, a phone app such as Termius or Blink included.
+  `yon box open 3000` shows the dev server an agent started.
+- **A personal assistant that stays up.** OpenClaw, Hermes Agent and similar
+  assistants run as long-lived services on the box. `install` leaves only
+  ssh reachable from the network; the assistant's web UI stays on the box's
+  localhost and `yon box open 18789` (the OpenClaw dashboard) brings it to
+  the client's browser.
+- **A desktop on a server.** `yon box desktop` is an XFCE session in the
+  browser, for GUI tools, or for signing in or solving a CAPTCHA in a
+  browser running on the box.
+
+Everything goes over ssh: no VPN, no agent on the client, no hosted
+service. Any provider works.
 
 ## Install
 
