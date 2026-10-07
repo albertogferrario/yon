@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # yon — remote dev boxes over the system ssh client: persistent shell,
-# remote desktop, a port of the box in the browser, first-time setup.
+# remote desktop, a port of the box in the browser, file transfer,
+# first-time setup.
 #
 # A box is known to this client (add, rm) and is ready to work on (install).
 # Each command moves one of the two.
@@ -29,11 +30,15 @@ yon add              new host -> ~/.ssh/config
 yon install          set up a fresh box
 yon desktop          xpra desktop through an ssh tunnel
 yon open             a port of the box, in the browser
+yon put              file or dir -> box
+yon get              file or dir <- box
 yon rm               drop a host yon added
 
 each command asks for what it needs. to skip the host question:
 yon <host> install|desktop|rm
 yon <host> open <port>
+yon <host> put <local> [remote]
+yon <host> get <remote> [local]
 
 <host>: ssh alias or user@addr
 on a machine with no hosts, install and desktop act on the machine itself
@@ -411,6 +416,83 @@ open_port() {
   forward "$local_port" "$port" "" ""
 }
 
+# --- put, get ---------------------------------------------------------------
+# Both are one rsync -a: files and directories alike, symlinks and times
+# kept, an interrupted copy resumed by running the command again.
+TRANSFER=(rsync -a --partial --progress)
+
+# Undoes what a terminal does to a dropped file: surrounding quotes or
+# backslash escapes, and a trailing space. Expands a leading tilde, which
+# reaches here as typed.
+# shellcheck disable=SC2088
+typed_path() {
+  local path=$1
+  path=${path%"${path##*[! ]}"}
+  if [[ $path == "'"*"'" && ${#path} -ge 2 ]]; then
+    path=${path:1:${#path}-2}
+  else
+    path=$(printf '%s' "$path" | sed 's/\\\(.\)/\1/g')
+  fi
+  if [[ $path == "~" || $path == "~/"* ]]; then path=$HOME${path:1}; fi
+  printf '%s' "$path"
+}
+
+# rsync reads a name with a colon before any slash as host:path.
+local_path() {
+  case $1 in
+    /* | . | .. | ./* | ../*) printf '%s' "$1" ;;
+    *) printf './%s' "$1" ;;
+  esac
+}
+
+# Relative paths start at the home of the box, so a leading tilde is dropped
+# rather than left to the remote side to expand.
+# shellcheck disable=SC2088
+remote_path() {
+  local path=$1
+  [[ $path != "~/"* ]] || path=${path:2}
+  if [[ -z $path || $path == "~" ]]; then path=.; fi
+  printf '%s:%s' "$HOST" "$path"
+}
+
+# rsync copies the contents of a source directory named with a trailing
+# slash; without it the directory itself is copied, as cp does.
+without_trailing_slash() {
+  local path=$1
+  while [[ $path == *?/ ]]; do path=${path%/}; done
+  printf '%s' "$path"
+}
+
+# put_files [local [remote]]: asks for both paths when none is given.
+put_files() {
+  local source=${1:-} target=${2:-}
+  if [[ $# -eq 0 ]]; then
+    open_prompts
+    ask "local path"
+    source=$(typed_path "$ANSWER")
+    ask "to, on $HOST" "~"
+    target=$ANSWER
+  fi
+  [[ -e $source ]] || die "no such path: $source"
+  command -v rsync >/dev/null || die "rsync missing"
+  "${TRANSFER[@]}" -- "$(local_path "$(without_trailing_slash "$source")")" "$(remote_path "$target")"
+}
+
+# get_files [remote [local]]: asks for both paths when none is given.
+get_files() {
+  local source=${1:-} target=${2:-.}
+  if [[ $# -eq 0 ]]; then
+    open_prompts
+    ask "path on $HOST"
+    source=$ANSWER
+    ask "to" .
+    target=$(typed_path "$ANSWER")
+  fi
+  [[ -n $source ]] || die "no path"
+  command -v rsync >/dev/null || die "rsync missing"
+  "${TRANSFER[@]}" -- "$(remote_path "$(without_trailing_slash "$source")")" "$(local_path "$target")"
+}
+
 # --- install ----------------------------------------------------------------
 # install runs as root on a fresh Ubuntu or Debian server. It installs no
 # development tools or agents.
@@ -436,7 +518,7 @@ provision_user() {
 
 provision_packages() {
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban tmux unattended-upgrades wget ca-certificates
+  DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban rsync tmux unattended-upgrades wget ca-certificates
 }
 
 # The 00- prefix matters: sshd keeps the first value it reads for each option.
@@ -599,13 +681,15 @@ exit \$status" -t || die "install failed on $HOST"
 
 action_menu() {
   open_prompts
-  choose "$HOST" "shell" "desktop" "open" "install" "rm"
+  choose "$HOST" "shell" "desktop" "open" "put" "get" "install" "rm"
   case $CHOICE in
     1) shell ;;
     2) desktop ;;
     3) open_port ;;
-    4) remote_install ;;
-    5) remove_host ;;
+    4) put_files ;;
+    5) get_files ;;
+    6) remote_install ;;
+    7) remove_host ;;
   esac
 }
 
@@ -655,7 +739,7 @@ install_command() {
 # These words are commands; any other first word is an ssh host.
 is_command() {
   case $1 in
-    add | install | desktop | open | rm | help | -h | --help) return 0 ;;
+    add | install | desktop | open | put | get | rm | help | -h | --help) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -681,6 +765,14 @@ main() {
         pick_host open
         open_port
         ;;
+      put:1)
+        pick_host put
+        put_files
+        ;;
+      get:1)
+        pick_host get
+        get_files
+        ;;
       rm:1)
         pick_host rm
         remove_host
@@ -700,6 +792,8 @@ main() {
     desktop:1) desktop ;;
     open:1) open_port ;;
     open:2) open_port "$2" ;;
+    put:1 | put:2 | put:3) put_files "${@:2}" ;;
+    get:1 | get:2 | get:3) get_files "${@:2}" ;;
     install:1) remote_install ;;
     rm:1) remove_host ;;
     *) die "bad command: $*" ;;

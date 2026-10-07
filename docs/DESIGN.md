@@ -4,14 +4,14 @@ How yon is put together and why. The README covers usage.
 
 ## Scope
 
-yon does four things on a remote Linux box: open a persistent shell,
-open a desktop, show one of its ports in the browser, and set up a fresh
-machine. It orchestrates `ssh`, `tmux`,
-`systemd` and Xpra; it reimplements none of them. Removing yon leaves the
-box and the ssh configuration fully usable by hand.
+yon does five things on a remote Linux box: open a persistent shell,
+open a desktop, show one of its ports in the browser, copy files and
+directories to and from it, and set up a fresh machine. It orchestrates
+`ssh`, `rsync`, `tmux`, `systemd` and Xpra; it reimplements none of them.
+Removing yon leaves the box and the ssh configuration fully usable by hand.
 
-Session naming, file transfer, networking overlays and development tooling
-are out of scope.
+Session naming, file synchronisation, networking overlays and development
+tooling are out of scope.
 
 ## States
 
@@ -23,12 +23,13 @@ and each command moves one of them, where it is held.
 | known | the client, in `~/.ssh/config` | `add` | `rm` |
 | ready | the box | `install` | |
 
-`shell`, `desktop` and `open` require a state and change none. No fact is copied
-between holders.
+`shell`, `desktop`, `open`, `put` and `get` require a state and change
+none. No fact is copied between holders.
 
 Every command runs without arguments and asks for what it needs. A host
 given first, in the manner of ssh, answers the host question in advance.
-`open` also takes the port after the command word. Without a host,
+`open` also takes the port after the command word, `put` and `get` their
+two paths. Without a host,
 `install` and `desktop` also offer the local machine, and act
 on it directly when no hosts are configured, which is the case on a box.
 
@@ -67,9 +68,10 @@ executes a script with `sh -c` locally, or through
 wraps the script in single quotes; values interpolated into scripts are
 validated against strict patterns first.
 
-Nothing is installed on the box for `shell`, `desktop` and `open`. `install` is the
-exception: the client copies the script to a `mktemp` file on the box, runs
-it there, and removes it.
+Nothing is installed on the box for `shell`, `desktop` and `open`; `put`
+and `get` expect `rsync` there. `install` is the exception: the client
+copies the script to a `mktemp` file on the box, runs it there, and removes
+it.
 
 ## Prompts
 
@@ -148,6 +150,39 @@ the host entry, which is needed because root can no longer log in.
 
 Steps are idempotent, but there is no rollback.
 
+## Put, get
+
+Each is a single `rsync -a --partial --progress` over ssh. `scp -r` needs
+nothing on the box, but it follows symlinks instead of copying them, drops
+modification times and cannot resume, which matters for project trees.
+`rsync` is therefore required on both sides; `install` adds it to the box,
+and a box without it fails with rsync's own message.
+
+Three adjustments are made to the paths before `rsync` sees them:
+
+- A relative local path is prefixed with `./`, because `rsync` reads a name
+  with a colon before any slash as `host:path`.
+- A leading `~/` is removed from a path on the box, and an empty path or
+  `~` becomes `.`. Relative paths already start at the home of the box, so
+  the result does not depend on the remote side expanding the tilde.
+- Trailing slashes are removed from the source. `rsync` would otherwise
+  copy the contents of the directory instead of the directory, and
+  completion and dropped paths add the slash unasked.
+
+With the slash gone, the destination of a directory is always its
+container: `put site work` gives `work/site`, and `work` is created when
+missing. Unlike `cp -r`, a directory cannot be renamed by the copy; a
+single file can.
+
+A local path typed at the prompt is first unescaped the way terminals paste
+a dropped file (surrounding single quotes or backslash escapes, a trailing
+space), and a leading tilde is expanded. Paths given as arguments have
+already been through the shell and are taken as they are.
+
+`put` checks that the local path exists; everything else is left to
+`rsync`, whose messages and exit status pass through. The options are the
+ones the rsync 2.6.9 shipped with macOS understands.
+
 ## Conventions
 
 - Under `pipefail`, a reader that exits early (`grep -q`, `awk '{exit}'`)
@@ -162,11 +197,13 @@ Steps are idempotent, but there is no rollback.
 ## Testing
 
 `test.sh` runs the script in a temporary home with fake `ssh`, `sudo`,
-`systemctl`, `loginctl` and `xpra` on `PATH`. The fake `ssh` hands the
+`systemctl`, `loginctl`, `rsync` and `xpra` on `PATH`. The fake `ssh` hands the
 remote command to a local shell, so quoting is exercised for real. Config
-edits, name validation, menus, the desktop unit and the choice of the local
-port are covered; a fake `sleep` ends the tunnel at once. CI runs the
-suite on Ubuntu and macOS.
+edits, name validation, menus, the desktop unit, the choice of the local
+port and the arguments handed to `rsync` are covered; a fake `sleep` ends
+the tunnel at once. The fake `rsync` then runs the real one against a
+directory standing in for the home of the box, so the copy itself is
+checked, ssh transport excluded. CI runs the suite on Ubuntu and macOS.
 
 `install` needs root and a real system. It is checked by hand on a
 disposable VM:
@@ -189,4 +226,7 @@ ssh access. That is expected.
   time.
 - The desktop has no authentication beyond ssh and local access to the box.
 - `open` assumes plain http on the forwarded port.
+- `put` and `get` overwrite without asking. With an rsync older than
+  3.2.4 on the client, the remote shell splits a path on the box that
+  contains spaces.
 - No uninstall for what `install` changes.

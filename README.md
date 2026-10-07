@@ -11,12 +11,16 @@ yon add              new host -> ~/.ssh/config
 yon install          set up a fresh box
 yon desktop          xpra desktop through an ssh tunnel
 yon open             a port of the box, in the browser
+yon put              file or dir -> box
+yon get              file or dir <- box
 yon rm               drop a host yon added
 ```
 
 Every command asks for what it needs. Put the host first to skip that
-question: `yon <host> install`, `yon <host> open 3000`. `<host>` is anything ssh accepts, an alias
-from `~/.ssh/config` or `user@addr`.
+question: `yon <host> install`, `yon <host> open 3000`,
+`yon <host> put <local> [remote]`, `yon <host> get <remote> [local]`.
+`<host>` is anything ssh accepts, an alias from `~/.ssh/config` or
+`user@addr`.
 
 | A box | Held by | Up | Down |
 | --- | --- | --- | --- |
@@ -35,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/albertogferrario/yon/main/install.s
 Drops `yon` into `~/.local/bin` (`/usr/local/bin` as root). Touches nothing
 else. From a checkout, `./install.sh` does the same.
 
-Client: macOS or Linux with `bash`, `ssh`, `curl`.
+Client: macOS or Linux with `bash`, `ssh`, `curl`, `rsync`.
 Box: Ubuntu or Debian with `apt` and `systemd`. Tested on Ubuntu 26.04 only.
 
 ## New box
@@ -57,9 +61,11 @@ box
   1) shell
   2) desktop
   3) open
-  4) install
-  5) rm
-> 4
+  4) put
+  5) get
+  6) install
+  7) rm
+> 6
 user on box [me]: dev
 desktop (xpra+xfce, ~1GB)? [y/N] y
 
@@ -89,7 +95,7 @@ Read this before running it on a machine you care about.
   including provider or automation accounts.
 - Enables `ufw` with only ssh open. Anything else you serve from the box
   needs its own rule.
-- Installs `fail2ban`, `tmux`, `unattended-upgrades`.
+- Installs `fail2ban`, `rsync`, `tmux`, `unattended-upgrades`.
 - Appends to the user's `.bashrc`: `~/.local/bin` on `PATH`, and attach to
   the tmux session `main` on ssh login.
 - With the desktop: adds the xpra.org apt repository, installs Xpra and XFCE,
@@ -126,6 +132,26 @@ Nothing is installed or started on the box, and no firewall rule is needed.
 If the local port is taken, the next free one is used and the address
 printed says which. Ports below 1024 are served from 8000 higher: 80 on the
 box is `http://localhost:8080`.
+
+## Put, get
+
+```
+$ yon box put ./site work        -> ~/work/site on the box
+$ yon box get work/site/dist     -> ./dist here
+```
+
+`put` copies a file or a directory to the box, `get` copies one back. Both
+are `rsync -a`: symlinks, permissions and times are kept, and running the
+same command again resumes an interrupted copy or sends only what changed.
+Paths on the box start at its home, which is also where `put` lands when no
+destination is given; `get` lands in the current directory. Without paths,
+both ask: a file dropped on the terminal is accepted as the local path.
+
+A directory is copied as a whole, with or without a trailing slash, and
+always into the destination, which is created if missing: it keeps its
+name. A single file can be renamed on the way, `put a.txt b.txt`. Files
+already at the destination are overwritten without asking; nothing is
+deleted there. `rsync` must be on both sides: `install` puts it on the box.
 
 ## Leaving a box
 

@@ -9,6 +9,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 export HOME="$WORK/home"
 export SSH_LOG="$WORK/ssh.log"
+export RSYNC_LOG="$WORK/rsync.log"
+export BOX_HOME="$WORK/box-home"
+REAL_RSYNC=$(command -v rsync || true)
+export REAL_RSYNC
 export YON_TTY="$WORK/tty"
 CONFIG="$HOME/.ssh/config"
 mkdir -p "$HOME/.ssh" "$WORK/bin"
@@ -39,6 +43,24 @@ cat >"$WORK/bin/sudo" <<'EOF'
 exec "$@"
 EOF
 
+# Logs its arguments, separated by "|", then copies for real with host:path
+# taken as a path under BOX_HOME, which stands in for the home of the box.
+cat >"$WORK/bin/rsync" <<'EOF'
+#!/bin/sh
+printf '%s|' "$@" >>"$RSYNC_LOG"
+echo >>"$RSYNC_LOG"
+[ -n "$REAL_RSYNC" ] || exit 0
+for argument; do
+  shift
+  case $argument in
+    /* | .* | -*) ;;
+    *:*) argument="$BOX_HOME/${argument#*:}" ;;
+  esac
+  set -- "$@" "$argument"
+done
+exec "$REAL_RSYNC" "$@" >/dev/null
+EOF
+
 # No forwarded port answers here, and no browser is opened.
 printf '#!/bin/sh\nexit 1\n' >"$WORK/bin/curl"
 # The remote side of a tunnel returns at once instead of holding it.
@@ -47,7 +69,7 @@ printf '#!/bin/sh\n[ "$1" = infinity ] || exec /bin/sleep "$@"\n' >"$WORK/bin/sl
 for tool in open xdg-open; do
   printf '#!/bin/sh\nexit 0\n' >"$WORK/bin/$tool"
 done
-chmod +x "$WORK/bin/ssh" "$WORK/bin/sudo" "$WORK/bin/curl" "$WORK/bin/sleep" "$WORK/bin/open" "$WORK/bin/xdg-open"
+chmod +x "$WORK/bin/ssh" "$WORK/bin/rsync" "$WORK/bin/sudo" "$WORK/bin/curl" "$WORK/bin/sleep" "$WORK/bin/open" "$WORK/bin/xdg-open"
 
 FAILURES=0
 
@@ -73,9 +95,11 @@ touch "$HOME/.ssh/k1" "$HOME/.ssh/k1.pub"
 cp "$CONFIG" "$WORK/config.original"
 
 check "help lists every command" \
-  bash -c "'$HERE/yon' --help | grep -c '^yon \(add\|install\|desktop\|open\|rm\) ' | grep -qx 5"
+  bash -c "'$HERE/yon' --help | grep -c '^yon \(add\|install\|desktop\|open\|put\|get\|rm\) ' | grep -qx 7"
 check "help shows the host-first form" \
   bash -c "'$HERE/yon' --help | grep -qxF 'yon <host> install|desktop|rm' && '$HERE/yon' --help | grep -qxF 'yon <host> open <port>'"
+check "help shows the host-first form of put and get" \
+  bash -c "'$HERE/yon' --help | grep -qxF 'yon <host> put <local> [remote]' && '$HERE/yon' --help | grep -qxF 'yon <host> get <remote> [local]'"
 check "interactive commands need a tty" \
   bash -c "YON_TTY=/nonexistent '$HERE/yon' 2>&1 | grep -q 'need a tty'"
 
@@ -92,7 +116,7 @@ check "add keeps a copy of the previous file" cmp -s "$WORK/config.original" "$C
 check "add leaves existing hosts untouched" bash -c "head -3 '$CONFIG' | cmp -s - '$WORK/config.original'"
 check "add then offers the host actions" grep -qF -- " -> box" "$SSH_LOG"
 
-for name in "bad name" "-x" "install" "open" "box"; do
+for name in "bad name" "-x" "install" "open" "put" "get" "box"; do
   answers "$name" 198.51.100.8 "" 1 1
   check "add rejects the name '$name'" rejects add
 done
@@ -176,6 +200,78 @@ for port in 0 65536 abc 80x 080 ""; do
   check "open rejects the port '$port'" rejects box open "$port"
 done
 check "open takes a single port" rejects box open 3000 3001
+
+# put, get: one rsync each way, for files and directories alike.
+# The tildes below are literal on purpose: yon resolves them itself.
+copied() { grep -qxF -- "-a|--partial|--progress|--|$1|$2|" "$RSYNC_LOG"; }
+mkdir -p "$WORK/stuff/dir" "$WORK/stuff/back" "$BOX_HOME/work/site"
+echo payload >"$WORK/stuff/dir/inner"
+ln -s inner "$WORK/stuff/dir/link"
+touch "$WORK/stuff/file" "$WORK/stuff/my file" "$WORK/stuff/a:b" "$BOX_HOME/notes.txt" "$BOX_HOME/work/site/index"
+cd "$WORK/stuff"
+: >"$RSYNC_LOG"
+"$HERE/yon" box put "$WORK/stuff/file"
+check "put copies to the home of the box by default" copied "$WORK/stuff/file" "box:."
+"$HERE/yon" box put dir/ work
+check "put takes a directory and a destination" copied ./dir "box:work"
+# shellcheck disable=SC2088
+"$HERE/yon" box put a:b '~/in box'
+check "put keeps a local name with a colon local" copied ./a:b "box:in box"
+"$HERE/yon" box put file '~'
+check "a remote tilde means the home of the box" copied ./file "box:."
+check "put rejects a missing local path" rejects box put nothing-here
+check "put takes at most two paths" rejects box put file a b
+
+: >"$RSYNC_LOG"
+"$HERE/yon" box get work/site/
+check "get copies into the current directory by default" copied "box:work/site" .
+# shellcheck disable=SC2088
+"$HERE/yon" box get '~/notes.txt' "$WORK/stuff/back"
+check "get takes a destination" copied "box:notes.txt" "$WORK/stuff/back"
+"$HERE/yon" me@198.51.100.9 get notes.txt
+check "get works on a destination outside the config" copied "me@198.51.100.9:notes.txt" .
+check "get takes at most two paths" rejects box get a b c
+
+if [[ -n $REAL_RSYNC ]]; then
+  check "put lands a file in the home of the box" test -f "$BOX_HOME/file"
+  check "a directory named with a trailing slash is copied whole" \
+    bash -c "grep -qx payload '$BOX_HOME/work/dir/inner'"
+  check "put keeps symlinks as symlinks" test -L "$BOX_HOME/work/dir/link"
+  check "get brings a directory back whole" test -f "$WORK/stuff/site/index"
+  check "get lands a file in the destination" test -f "$WORK/stuff/back/notes.txt"
+fi
+
+# Asked for, a local path is unescaped the way a terminal pastes a dropped file.
+: >"$RSYNC_LOG"
+answers 'my\ file ' ""
+"$HERE/yon" box put >/dev/null 2>&1
+check "put asks for the paths" copied "./my file" "box:."
+answers "'$WORK/stuff/my file'" work
+"$HERE/yon" box put >/dev/null 2>&1
+check "put accepts a quoted dropped path" copied "$WORK/stuff/my file" "box:work"
+# shellcheck disable=SC2088
+answers '~/.ssh/k1' ""
+"$HERE/yon" box put >/dev/null 2>&1
+check "a local tilde means the home of this machine" copied "$HOME/.ssh/k1" "box:."
+: >"$RSYNC_LOG"
+answers 2 file ""
+PUT=$("$HERE/yon" put 2>&1)
+check "put without a host asks for one" copied ./file "box:."
+check "put does not offer this machine" bash -c "! grep -q 'this machine' <<<'$PUT'"
+answers 2 work ""
+"$HERE/yon" get >/dev/null 2>&1
+check "get without a host asks for one" copied "box:work" .
+answers ""
+check "get rejects an empty remote path" rejects box get
+: >"$RSYNC_LOG"
+answers 2 4 file ""
+"$HERE/yon" >/dev/null 2>&1
+check "the action menu offers put" copied ./file "box:."
+answers 2 5 work ""
+"$HERE/yon" >/dev/null 2>&1
+check "the action menu offers get" copied "box:work" .
+check "put and get take no arguments without a host" bash -c "! '$HERE/yon' put file && ! '$HERE/yon' get work"
+cd "$HERE"
 
 # A listener on the loopback interface occupies a port picked by the system.
 if command -v python3 >/dev/null; then
