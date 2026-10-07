@@ -45,8 +45,11 @@ EOF
 
 # Logs its arguments, separated by "|", then copies for real with host:path
 # taken as a path under BOX_HOME, which stands in for the home of the box.
+# openrsync runs a local copy by starting "rsync --server" from PATH; that
+# call is passed through untouched, since its stdout carries the protocol.
 cat >"$WORK/bin/rsync" <<'EOF'
 #!/bin/sh
+[ "$1" != --server ] || exec "$REAL_RSYNC" "$@"
 printf '%s|' "$@" >>"$RSYNC_LOG"
 echo >>"$RSYNC_LOG"
 [ -n "$REAL_RSYNC" ] || exit 0
