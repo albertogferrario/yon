@@ -96,7 +96,7 @@ plan
   out      ubuntu
   net      ufw (ssh only), fail2ban, unattended-upgrades
   tmux     autoattach on ssh login
-  desktop  xpra+xfce, linger
+  desktop  xpra+xfce, linger, started
 
 go? [y/N] y
 ...
@@ -123,7 +123,8 @@ Read this before running it on a machine you care about.
   the tmux session `main` on ssh login.
 - With the desktop: adds the xpra.org apt repository (source file from a
   fixed Xpra release tag), installs Xpra and XFCE,
-  disables Xpra's system-wide proxy, enables lingering for the user.
+  disables Xpra's system-wide proxy, enables lingering for the user and
+  starts the desktop service.
 
 It shows this plan and waits for a yes. It does not undo itself: keep the
 root session open until you have verified the new login from another
@@ -134,7 +135,10 @@ terminal. It installs no dev tools or agents.
 `yon <host> desktop` makes sure a systemd user service
 (`yon-desktop.service`) runs Xpra with XFCE, forwards port 14500 over the
 ssh connection and opens `http://localhost:14500`. `^C` closes the tunnel;
-the desktop keeps running and restarts at boot.
+the desktop keeps running and restarts at boot. `install` with the desktop
+starts the same service, so the display `:100` exists before the first
+`yon <host> desktop`. The service restarts after any exit; to stop it, use
+`systemctl --user stop yon-desktop.service` on the box.
 
 The web client listens on the box's localhost **without a password**. Nothing
 is exposed to the network, but any local account on the box can reach it.

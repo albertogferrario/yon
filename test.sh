@@ -341,6 +341,7 @@ UNIT="$HOME/.config/systemd/user/yon-desktop.service"
 check "desktop writes the user service" test -f "$UNIT"
 check "the service binds the web client to localhost" \
   grep -qF -- "$WORK/bin/xpra start-desktop :100 --start=xfce4-session --bind-tcp=127.0.0.1:14500 --html=on --daemon=no" "$UNIT"
+check "the service restarts after any exit" grep -qxF -- "Restart=always" "$UNIT"
 check "desktop enables and starts the service" \
   grep -qxF -- "--user enable --quiet --now yon-desktop.service" "$SYSTEMCTL_LOG"
 check "a new unit triggers a reload" grep -qF -- "daemon-reload" "$SYSTEMCTL_LOG"

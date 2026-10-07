@@ -287,7 +287,7 @@ Description=Yon remote desktop (Xpra)
 
 [Service]
 ExecStart=$xpra_bin start-desktop :100 --start=xfce4-session --bind-tcp=127.0.0.1:'$DESKTOP_PORT' --html=on --daemon=no
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]
@@ -573,11 +573,13 @@ EOF
 }
 
 # The xpra package enables a system-wide proxy on port 14500, unused here.
-# Lingering lets the user's desktop service start at boot. The apt source
-# file comes from a release tag; a distribution newer than the tag has none.
+# Lingering lets the user's desktop service start at boot, and the service is
+# started here so the display exists before the first "yon desktop". The apt
+# source file comes from a release tag; a distribution newer than the tag has
+# none.
 XPRA_TAG=v6.5.4
 provision_desktop() {
-  local codename
+  local codename uid home
   # shellcheck source=/dev/null
   codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
   wget -O /usr/share/keyrings/xpra.asc https://xpra.org/xpra.asc
@@ -588,6 +590,10 @@ provision_desktop() {
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xfce4 xfce4-terminal dbus-x11
   systemctl disable --now xpra-server.socket xpra-server.service || true
   loginctl enable-linger "$1"
+  uid=$(id -u "$1")
+  home=$(getent passwd "$1" | cut -d: -f6)
+  systemctl start "user@$uid.service"
+  runuser -u "$1" -- env HOME="$home" XDG_RUNTIME_DIR="/run/user/$uid" sh -c "$ENSURE_DESKTOP_SCRIPT"
 }
 
 # Accounts other than $1 with a login shell: AllowUsers shuts them out of ssh.
@@ -626,7 +632,7 @@ install_box() {
   fi
   if [[ -n $desktop ]]; then
     desktop_line="
-  desktop  xpra+xfce, linger"
+  desktop  xpra+xfce, linger, started"
   fi
 
   cat <<EOF

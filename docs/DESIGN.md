@@ -117,6 +117,11 @@ from the existing one, enables and starts it, and checks lingering. The
 forward is `14500` on both ends. When the local port already answers, the
 tunnel is taken to be open and only the browser is launched.
 
+`install` runs the same script as the new user once the packages are in
+place, so the display is available to programs on the box without a first
+connection from the client. The unit has `Restart=always`: a clean exit of
+Xpra, such as `xpra stop :100`, is followed by a restart.
+
 The service refuses to start when a live Xpra session not managed by the
 unit already holds display `:100`; dead sessions listed by `xpra list` are
 ignored. The HTML5 client binds to `127.0.0.1` only, without a password.
@@ -212,7 +217,8 @@ disposable VM:
 2. With a throwaway `HOME` and an ssh wrapper pointing at its config, run
    `yon add`, then `install` with the desktop.
 3. Verify: the new user logs in and root is refused; `ufw` and `fail2ban`
-   are active; `yon <host> desktop` serves the Xpra page through the
+   are active; the desktop service is active right after `install`;
+   `yon <host> desktop` serves the Xpra page through the
    tunnel; closing the tunnel leaves the service running; the service is
    back after a reboot.
 
