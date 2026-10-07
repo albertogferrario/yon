@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# homesh — remote dev boxes over the system ssh client: persistent shell,
+# yon — remote dev boxes over the system ssh client: persistent shell,
 # remote desktop, first-time provisioning.
 #
-# Hosts are the ones in ~/.ssh/config; homesh keeps no state of its own.
+# Hosts are the ones in ~/.ssh/config; yon keeps no state of its own.
 
 # The embedded scripts are single-quoted on purpose: they expand on the target.
 # shellcheck disable=SC2016
@@ -10,8 +10,8 @@ set -euo pipefail
 
 SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
 SSH_CONFIG="$HOME/.ssh/config"
-# Comment line placed right above every Host block homesh writes.
-MARKER="# homesh"
+# Comment line placed right above every Host block yon writes.
+MARKER="# yon"
 HOST=""
 DESKTOP_PORT=14500
 DESKTOP_URL="http://localhost:$DESKTOP_PORT"
@@ -19,35 +19,35 @@ DESKTOP_WAIT_SECONDS=90
 
 usage() {
   cat <<EOF
-homesh                  pick host, pick action
-homesh add              new host -> ~/.ssh/config
-homesh <host>           shell (tmux session)
-homesh <host> desktop   xpra desktop through an ssh tunnel
-homesh <host> init      provision a fresh box
-homesh <host> rm        drop a host homesh added
+yon                  pick host, pick action
+yon add              new host -> ~/.ssh/config
+yon <host>           shell (tmux session)
+yon <host> desktop   xpra desktop through an ssh tunnel
+yon <host> init      provision a fresh box
+yon <host> rm        drop a host yon added
 
 <host>: ssh alias or user@addr
 
 on the box:
-homesh init             provision this box (root)
-homesh desktop          start the desktop service
+yon init             provision this box (root)
+yon desktop          start the desktop service
 EOF
 }
 
 die() {
-  echo "homesh: $*" >&2
+  echo "yon: $*" >&2
   exit 1
 }
 
 # --- prompts ----------------------------------------------------------------
 # Answers are read from the terminal on descriptor 3, opened once, so they
-# work while standard input is busy and can be scripted through HOMESH_TTY.
+# work while standard input is busy and can be scripted through YON_TTY.
 
 PROMPTS_OPEN=""
 
 open_prompts() {
   [[ -z $PROMPTS_OPEN ]] || return 0
-  local source=${HOMESH_TTY:-/dev/tty}
+  local source=${YON_TTY:-/dev/tty}
   { : <"$source"; } 2>/dev/null || die "need a tty"
   exec 3<"$source"
   PROMPTS_OPEN=1
@@ -111,7 +111,7 @@ config_hosts() {
   awk 'tolower($1) == "host" { for (i = 2; i <= NF; i++) if ($i !~ /[*?!]/) print $i }' "$SSH_CONFIG"
 }
 
-# True when the Host line naming $1 sits right below the homesh marker.
+# True when the Host line naming $1 sits right below the yon marker.
 host_is_managed() {
   [[ -f $SSH_CONFIG ]] || return 1
   awk -v host="$1" -v marker="$MARKER" '
@@ -137,7 +137,7 @@ host_exists() {
 }
 
 backup_config() {
-  [[ ! -f $SSH_CONFIG ]] || cp -p "$SSH_CONFIG" "$SSH_CONFIG.homesh.bak"
+  [[ ! -f $SSH_CONFIG ]] || cp -p "$SSH_CONFIG" "$SSH_CONFIG.yon.bak"
 }
 
 # rewrite_config <awk program> [awk options...]: filters the config in place.
@@ -145,7 +145,7 @@ rewrite_config() {
   local program=$1
   shift
   backup_config
-  awk "$@" "$program" "$SSH_CONFIG.homesh.bak" >"$SSH_CONFIG"
+  awk "$@" "$program" "$SSH_CONFIG.yon.bak" >"$SSH_CONFIG"
   chmod 600 "$SSH_CONFIG"
 }
 
@@ -208,7 +208,7 @@ add_host() {
 
 remove_host() {
   open_prompts
-  host_is_managed "$HOST" || die "not homesh-managed: $HOST (edit $SSH_CONFIG)"
+  host_is_managed "$HOST" || die "not yon-managed: $HOST (edit $SSH_CONFIG)"
   confirm "rm $HOST?" || die "aborted"
   rewrite_config '
     function flush() { if (held) { print marker; held = 0 } }
@@ -221,7 +221,7 @@ remove_host() {
     }
     { if (skipping) next; flush(); print }
     END { flush() }' -v host="$HOST" -v marker="$MARKER"
-  echo "removed $HOST (backup: $SSH_CONFIG.homesh.bak)"
+  echo "removed $HOST (backup: $SSH_CONFIG.yon.bak)"
 }
 
 # set_host_user <user>: changes the User of the managed block of HOST.
@@ -250,13 +250,13 @@ shell() {
 # Installs and starts a systemd user service running an Xpra desktop whose
 # HTML5 client listens on localhost only. Idempotent; installs no packages.
 ENSURE_DESKTOP_SCRIPT='set -e
-service=homesh-desktop.service
-xpra_bin=$(command -v xpra) || { echo "xpra missing (homesh init, pick desktop)" >&2; exit 1; }
-command -v xfce4-session >/dev/null || { echo "xfce4-session missing (homesh init, pick desktop)" >&2; exit 1; }
+service=yon-desktop.service
+xpra_bin=$(command -v xpra) || { echo "xpra missing (yon init, pick desktop)" >&2; exit 1; }
+command -v xfce4-session >/dev/null || { echo "xfce4-session missing (yon init, pick desktop)" >&2; exit 1; }
 
 # Only a live session blocks the service; xpra also lists dead ones.
 if ! systemctl --user is-active --quiet "$service" && xpra list 2>/dev/null | grep -Eq "LIVE session at :100([^0-9]|$)"; then
-  echo ":100 busy (live session outside homesh): xpra stop :100" >&2
+  echo ":100 busy (live session outside yon): xpra stop :100" >&2
   exit 1
 fi
 
@@ -264,7 +264,7 @@ unit="$HOME/.config/systemd/user/$service"
 mkdir -p "$(dirname "$unit")"
 cat > "$unit.new" <<EOF
 [Unit]
-Description=Homesh remote desktop (Xpra)
+Description=Yon remote desktop (Xpra)
 
 [Service]
 ExecStart=$xpra_bin start-desktop :100 --start=xfce4-session --bind-tcp=127.0.0.1:'$DESKTOP_PORT' --html=on --daemon=no
@@ -311,7 +311,7 @@ open_browser_when_ready() {
     sleep 1
     waited=$((waited + 1))
     if [[ $waited -ge $DESKTOP_WAIT_SECONDS ]]; then
-      printf 'homesh: no answer on %s after %ss\r\n' "$DESKTOP_URL" "$DESKTOP_WAIT_SECONDS" >&2
+      printf 'yon: no answer on %s after %ss\r\n' "$DESKTOP_URL" "$DESKTOP_WAIT_SECONDS" >&2
       return 1
     fi
   done
@@ -446,20 +446,20 @@ valid_user() {
 }
 
 # Interactive on purpose: it rewrites who can log in, so the plan is shown and
-# confirmed before anything changes. HOMESH_INIT_USER and HOMESH_INIT_DESKTOP
+# confirmed before anything changes. YON_INIT_USER and YON_INIT_DESKTOP
 # carry answers already given on the client.
 init() {
   [[ $EUID -eq 0 ]] || die "init: need root"
   command -v apt-get >/dev/null || die "init: ubuntu/debian only"
   open_prompts
 
-  local user=${HOMESH_INIT_USER:-} desktop="" desktop_line=""
+  local user=${YON_INIT_USER:-} desktop="" desktop_line=""
   if [[ -z $user ]]; then
     ask "user" "${SUDO_USER:-}"
     user=$ANSWER
   fi
   valid_user "$user" || die "bad user: $user"
-  case ${HOMESH_INIT_DESKTOP:-} in
+  case ${YON_INIT_DESKTOP:-} in
     1) desktop=1 ;;
     0) ;;
     *) if confirm "desktop (xpra+xfce, ~1GB)?"; then desktop=1; fi ;;
@@ -516,7 +516,7 @@ remote_init() {
   [[ $copy == /* ]] || die "bad reply from $HOST: $copy"
   run "elevate=''
 [ \"\$(id -u)\" = 0 ] || elevate=sudo
-\$elevate env HOMESH_INIT_USER=$user HOMESH_INIT_DESKTOP=$desktop '$copy' init
+\$elevate env YON_INIT_USER=$user YON_INIT_DESKTOP=$desktop '$copy' init
 status=\$?
 rm -f '$copy'
 exit \$status" -t || die "init failed on $HOST"
@@ -524,7 +524,7 @@ exit \$status" -t || die "init failed on $HOST"
   [[ $user != "$login" ]] || return 0
   if host_is_managed "$HOST"; then
     set_host_user "$user"
-    echo "$HOST: user -> $user (backup: $SSH_CONFIG.homesh.bak)"
+    echo "$HOST: user -> $user (backup: $SSH_CONFIG.yon.bak)"
   else
     echo "set 'User $user' for $HOST in $SSH_CONFIG"
   fi

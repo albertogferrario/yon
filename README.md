@@ -1,19 +1,19 @@
-# homesh
+# yon
 
 Remote dev boxes over ssh. One bash script that turns a fresh VPS into a
 development home and gets you into its shell or its desktop with one command.
 
 ```
-homesh                  pick host, pick action
-homesh add              new host -> ~/.ssh/config
-homesh <host>           shell (tmux session)
-homesh <host> desktop   xpra desktop through an ssh tunnel
-homesh <host> init      provision a fresh box
-homesh <host> rm        drop a host homesh added
+yon                  pick host, pick action
+yon add              new host -> ~/.ssh/config
+yon <host>           shell (tmux session)
+yon <host> desktop   xpra desktop through an ssh tunnel
+yon <host> init      provision a fresh box
+yon <host> rm        drop a host yon added
 ```
 
 `<host>` is anything ssh accepts: an alias from `~/.ssh/config` or `user@addr`.
-Hosts live in `~/.ssh/config` and nowhere else; homesh keeps no state.
+Hosts live in `~/.ssh/config` and nowhere else; yon keeps no state.
 
 ## Install
 
@@ -21,7 +21,7 @@ Hosts live in `~/.ssh/config` and nowhere else; homesh keeps no state.
 curl -fsSL https://raw.githubusercontent.com/albertogferrario/homesh/main/install.sh | sh
 ```
 
-Drops `homesh` into `~/.local/bin` (`/usr/local/bin` as root). Touches nothing
+Drops `yon` into `~/.local/bin` (`/usr/local/bin` as root). Touches nothing
 else. From a checkout, `./install.sh` does the same.
 
 Client: macOS or Linux with `bash`, `ssh`, `curl`.
@@ -30,7 +30,7 @@ Box: Ubuntu or Debian with `apt` and `systemd`. Tested on Ubuntu 26.04 only.
 ## New box
 
 ```
-$ homesh add
+$ yon add
 host: box
 addr: 203.0.113.10
 user [root]:
@@ -63,8 +63,8 @@ go? [y/N] y
 box: user -> dev
 ```
 
-After that, `homesh box` lands in a tmux session that survives disconnects,
-and `homesh box desktop` opens the desktop in the browser.
+After that, `yon box` lands in a tmux session that survives disconnects,
+and `yon box desktop` opens the desktop in the browser.
 
 ## What init does to the box
 
@@ -89,8 +89,8 @@ terminal. It installs no dev tools or agents.
 
 ## Desktop
 
-`homesh <host> desktop` makes sure a systemd user service
-(`homesh-desktop.service`) runs Xpra with XFCE, forwards port 14500 over the
+`yon <host> desktop` makes sure a systemd user service
+(`yon-desktop.service`) runs Xpra with XFCE, forwards port 14500 over the
 ssh connection and opens `http://localhost:14500`. `^C` closes the tunnel;
 the desktop keeps running and restarts at boot.
 
@@ -101,7 +101,7 @@ Fine on a single-user box, not on a shared one.
 To remove it, on the box:
 
 ```sh
-systemctl --user disable --now homesh-desktop.service
+systemctl --user disable --now yon-desktop.service
 ```
 
 ## Leaving a box
@@ -109,24 +109,24 @@ systemctl --user disable --now homesh-desktop.service
 Nothing here is automated. On the box:
 
 ```sh
-systemctl --user disable --now homesh-desktop.service
+systemctl --user disable --now yon-desktop.service
 ```
 
 Then remove what you put there yourself (credentials, repository keys,
 agent logins) and delete the user or hand it over. To give other accounts
 ssh access back, edit or remove
 `/etc/ssh/sshd_config.d/00-hardening.conf` and reload ssh. On the client,
-`homesh <host> rm`.
+`yon <host> rm`.
 
 ## Notes
 
-- `add` and `rm` only write blocks marked `# homesh` in `~/.ssh/config`, and
-  keep the previous file as `config.homesh.bak`. Hosts you wrote by hand show
+- `add` and `rm` only write blocks marked `# yon` in `~/.ssh/config`, and
+  keep the previous file as `config.yon.bak`. Hosts you wrote by hand show
   up in the menu and are never modified.
 - Hosts defined in files pulled in with `Include` are not listed.
 - Port 14500 and display `:100` are fixed.
 - tmux sessions do not survive a reboot of the box; the desktop does.
-- On the box itself, `homesh init` (as root) and `homesh desktop` act locally.
+- On the box itself, `yon init` (as root) and `yon desktop` act locally.
 
 ## Tests
 

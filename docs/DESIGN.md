@@ -1,12 +1,12 @@
 # Design
 
-How homesh is put together and why. The README covers usage.
+How yon is put together and why. The README covers usage.
 
 ## Scope
 
-homesh does three things on a remote Linux box: open a persistent shell,
+yon does three things on a remote Linux box: open a persistent shell,
 open a desktop, and provision a fresh machine. It orchestrates `ssh`, `tmux`,
-`systemd` and Xpra; it reimplements none of them. Removing homesh leaves the
+`systemd` and Xpra; it reimplements none of them. Removing yon leaves the
 box and the ssh configuration fully usable by hand.
 
 Session naming, file transfer, networking overlays and development tooling
@@ -25,14 +25,14 @@ weaker testing and quoting hazards, addressed by the conventions below.
 
 ## Hosts
 
-Hosts are the entries of `~/.ssh/config`. homesh has no host database.
+Hosts are the entries of `~/.ssh/config`. yon has no host database.
 
 - Listing reads the `Host` lines and skips patterns. User and address are
   resolved by `ssh -G`, so the menu shows what ssh would actually use.
-- `add` appends a block preceded by the marker line `# homesh`.
+- `add` appends a block preceded by the marker line `# yon`.
 - `rm` and the user switch after `init` only touch blocks that carry the
   marker. Hand-written hosts are listed and usable, never modified.
-- Every write keeps the previous file as `config.homesh.bak`.
+- Every write keeps the previous file as `config.yon.bak`.
 - `Include`d files are not parsed.
 
 Any first argument that is not a command word is taken as an ssh
@@ -56,7 +56,7 @@ it there, and removes it.
 Interactive input is read from file descriptor 3, opened once on the
 terminal. This keeps prompts working while standard input is in use (the
 script being copied to the box, a pipe) and makes them scriptable: when
-`HOMESH_TTY` names a file, answers are read from it line by line. The test
+`YON_TTY` names a file, answers are read from it line by line. The test
 suite relies on this.
 
 `ask`, `confirm` and `choose` return through the variables `ANSWER` and
@@ -65,7 +65,7 @@ run them in a subshell with its own copy of the descriptor.
 
 ## Shell
 
-`homesh <host>` is `ssh -- <host>`. Persistence comes from the box: `init`
+`yon <host>` is `ssh -- <host>`. Persistence comes from the box: `init`
 appends to the user's `.bashrc` a line that attaches every interactive ssh
 login to the tmux session `main`.
 
@@ -104,8 +104,8 @@ drop-in is validated with `sshd -t` before the reload. The drop-in is named
 option.
 
 Run from the client, `init` asks its questions locally and passes the
-answers to the remote run through `HOMESH_INIT_USER` and
-`HOMESH_INIT_DESKTOP`. The plan and the final confirmation are still shown
+answers to the remote run through `YON_INIT_USER` and
+`YON_INIT_DESKTOP`. The plan and the final confirmation are still shown
 by the remote side. Knowing the chosen user, the client can then repoint
 the host entry, which is needed because root can no longer log in.
 
@@ -135,9 +135,9 @@ disposable VM:
 
 1. Launch an Ubuntu VM and put a public key in root's `authorized_keys`.
 2. With a throwaway `HOME` and an ssh wrapper pointing at its config, run
-   `homesh add`, then `init` with the desktop.
+   `yon add`, then `init` with the desktop.
 3. Verify: the new user logs in and root is refused; `ufw` and `fail2ban`
-   are active; `homesh <host> desktop` serves the Xpra page through the
+   are active; `yon <host> desktop` serves the Xpra page through the
    tunnel; closing the tunnel leaves the service running; the service is
    back after a reboot.
 
