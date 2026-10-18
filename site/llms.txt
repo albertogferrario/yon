@@ -2,7 +2,7 @@
 
 > yon is a single Bash script that turns a fresh VPS (Ubuntu or Debian) into a remote development box reached over ssh: a persistent tmux shell, an XFCE desktop in the browser through an ssh tunnel, any port of the box forwarded to the local browser, and file copies with rsync. It hardens the box on setup (keys-only ssh for one user, ufw with only ssh open, fail2ban, unattended upgrades) and keeps no state of its own beyond `~/.ssh/config`. MIT licensed.
 
-Client: macOS or Linux with bash, ssh, curl, rsync. Box: Ubuntu or Debian with apt and systemd.
+Client: macOS or Linux with bash, ssh, curl, rsync. Box: Ubuntu or Debian with apt and systemd, tested on Ubuntu 26.04.
 
 Install on the client:
 
@@ -18,6 +18,19 @@ Commands:
 - `yon <host> put <local> [remote]`, `yon <host> get <remote> [local]`: copy files or directories with `rsync -a`, resumable
 - `yon <host> rm`: remove a host that yon added
 
+`<host>` is an alias from `~/.ssh/config` or `user@addr`. Without it, each command asks for the host and for what else it needs.
+
+## What install changes on the box
+
+- A new sudo user, with root's `authorized_keys` copied to it.
+- `/etc/ssh/sshd_config.d/00-hardening.conf`: no root login, no passwords, `AllowUsers <user>`. Every other account loses ssh access; the plan names those with a login shell.
+- `ufw` with only ssh open, `fail2ban`, `unattended-upgrades`, `rsync`, `tmux`; the user's ssh logins attach to the tmux session `main`.
+- With the desktop: Xpra and XFCE from the xpra.org repository, lingering for the user, and the `yon-desktop.service` user service started. It restarts after any exit and at boot.
+
+It does not undo itself: keep the root session open until the new login works.
+
+The desktop's web client listens on the box's localhost without a password. Nothing reaches it from the network, but every local account of the box does: fine on a single-user box, not on a shared one.
+
 ## For agents
 
 Ask the user before running `put`, `get` or `rm`. `put` and `get` overwrite files of the same name at the destination without asking, and `rm` removes a host entry from `~/.ssh/config`. `install` shows its plan and asks before applying: pass that question to the user rather than answering it.
@@ -28,6 +41,10 @@ Ask the user before running `put`, `get` or `rm`. `put` and `get` overwrite file
 - Self-hosted personal assistants (OpenClaw, Hermes Agent) on a box where only ssh is reachable; the web UI stays on the box's localhost and `yon <host> open 18789` reaches the OpenClaw dashboard.
 - A browser-based desktop on a headless server for GUI tools, sign-ins and CAPTCHAs.
 - Everything goes over ssh: no VPN (Tailscale not required), no hosted service, any provider.
+
+## PS Vita
+
+yon-vita is a client for the PlayStation Vita, as a homebrew application. It opens the tmux shell of a box prepared by `yon install`, with an on-screen keyboard and the touch screen as the mouse, and shows the box's desktop over VNC through the same ssh connection. It is in development and not yet published.
 
 ## Docs
 

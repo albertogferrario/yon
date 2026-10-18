@@ -55,11 +55,18 @@ yon put              file or dir -&gt; box
 yon get              file or dir &lt;- box
 yon rm               drop a host yon added</pre>
 
+<p>Every command asks for what it needs. Put the host first to skip that
+question: <code>yon box install</code>, <code>yon box open 3000</code>,
+<code>yon box put ./site work</code>. A host is an alias from
+<code>~/.ssh/config</code> or <code>user@addr</code>. yon keeps no state of its
+own beyond <code>~/.ssh/config</code>.</p>
+
 <h2>Use cases</h2>
 <ul>
   <li><strong>Coding agents on a VPS.</strong> Claude Code, Codex or OpenCode
-  in a tmux session that survives disconnects and that any ssh client, a phone app included, reattaches to; <code>yon box open 3000</code>
-  shows the dev server they start.</li>
+  in a tmux session that survives disconnects and that any ssh client, a phone
+  app included, reattaches to; <code>yon box open 3000</code> shows the dev
+  server they start.</li>
   <li><strong>A personal assistant that stays up.</strong> OpenClaw or Hermes
   Agent on a box where only ssh is reachable; <code>yon box open 18789</code>
   brings the OpenClaw dashboard to the local browser.</li>
@@ -67,13 +74,39 @@ yon rm               drop a host yon added</pre>
   ssh tunnel, for GUI tools, sign-ins and CAPTCHAs.</li>
 </ul>
 
-<p>Everything goes over ssh: no VPN, no hosted service, any provider.</p>
+<p>Everything goes over ssh: no VPN, no agent on the client, no hosted
+service, any provider.</p>
 
 <h2>What install does</h2>
-<p>New sudo user, keys-only ssh for that user alone, ufw with only ssh open,
-fail2ban, unattended upgrades, tmux on login, optionally Xpra and XFCE. It
-shows the plan and waits for a yes. Client: macOS or Linux. Box: Ubuntu or
-Debian.</p>
+<p>A new sudo user, keys-only ssh for that user alone, ufw with only ssh open,
+fail2ban, unattended upgrades, tmux on login, optionally Xpra and XFCE. Every
+other account loses ssh access; the plan names those with a login shell. It
+shows the plan and waits for a yes, and it does not undo itself: keep the root
+session open until the new login works. Client: macOS or Linux. Box: Ubuntu or
+Debian, tested on Ubuntu 26.04.</p>
+
+<h2>Desktop, ports, files</h2>
+<ul>
+  <li><strong>Desktop.</strong> A systemd user service runs Xpra with XFCE on
+  the box; <code>install</code> starts it, and it restarts after any exit and
+  at boot. <code>yon box desktop</code> forwards it over ssh and opens it in
+  the browser. Its web client has no password and listens on the box's
+  localhost: nothing reaches it from the network, every local account of the
+  box does. Fine on a single-user box, not on a shared one.</li>
+  <li><strong>Ports.</strong> <code>yon box open 3000</code> forwards a port
+  of the box to <code>http://localhost:3000</code>; nothing is installed on the
+  box and no firewall rule is needed.</li>
+  <li><strong>Files.</strong> <code>put</code> and <code>get</code> are
+  <code>rsync -a</code>: running them again resumes a copy or sends only what
+  changed. Files at the destination are overwritten without asking.</li>
+</ul>
+
+<h2>PS Vita</h2>
+<p>yon-vita is a client for the PlayStation Vita, as a homebrew application.
+It opens the tmux shell of a box prepared by <code>yon install</code>, with an
+on-screen keyboard and the touch screen as the mouse, and shows the box's
+desktop over VNC through the same ssh connection. It is in development and not
+yet published.</p>
 
 <footer>
   <a href="https://github.com/albertogferrario/yon">source</a> ·
