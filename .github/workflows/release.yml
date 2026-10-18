@@ -1,0 +1,26 @@
+name: release
+
+# Pushing a tag vX.Y.Z publishes the GitHub release of that tag: the tests
+# run first, then the release gets the script, the installer and their
+# SHA-256 sums, and notes listing the changes since the previous tag.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: ./test.sh
+      - run: sha256sum yon install.sh > SHA256SUMS
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" yon install.sh SHA256SUMS \
+            --title "yon ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag

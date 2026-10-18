@@ -220,6 +220,19 @@ Runs against fake `ssh`, `sudo` and `systemd` in a temporary home.
 No network beyond the loopback interface.
 How it is built: [docs/DESIGN.md](docs/DESIGN.md).
 
+## Releases
+
+A release is a tag `vX.Y.Z` on `master`, pushed:
+
+```sh
+git tag -a v0.2.0 -m "yon 0.2.0"
+git push origin v0.2.0
+```
+
+The `release` workflow runs the tests and publishes the GitHub release of
+that tag, with `yon`, `install.sh`, their `SHA256SUMS` and notes listing
+the changes since the previous tag.
+
 ## License
 
 MIT
